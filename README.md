@@ -61,7 +61,7 @@ git push origin main
 
 Prima di creare il pacchetto assicurarsi che tutte le modifiche siano state salvate su `main`.
 
-Esempio per la versione `0.1.0`:
+Esempio per la versione `0.1.2`:
 
 ```bash
 git add .
@@ -72,8 +72,8 @@ git push origin main
 Creare quindi il tag:
 
 ```bash
-git tag -a v0.1.1 -m "v0.1.1"
-git push origin v0.1.1
+git tag -a v0.1.2 -m "v0.1.2"
+git push origin v0.1.2
 ```
 
 ## Creazione dello ZIP
@@ -91,21 +91,21 @@ Creare il pacchetto partendo dal tag:
 ```bash
 git archive \
   --format=zip \
-  --prefix=wildix-meet-audio-bridge-v0.1.1/ \
-  --output=dist/wildix-meet-audio-bridge-v0.1.1.zip \
-  v0.1.1
+  --prefix=wildix-meet-audio-bridge-v0.1.2/ \
+  --output=dist/wildix-meet-audio-bridge-v0.1.2.zip \
+  v0.1.2
 ```
 
 Controllare il contenuto:
 
 ```bash
-unzip -l dist/wildix-meet-audio-bridge-v0.1.1.zip
+unzip -l dist/wildix-meet-audio-bridge-v0.1.2.zip
 ```
 
 Il file risultante sarà:
 
 ```text
-dist/wildix-meet-audio-bridge-v0.1.1.zip
+dist/wildix-meet-audio-bridge-v0.1.2.zip
 ```
 
 È consigliato aggiungere `dist/` al `.gitignore`:
@@ -130,7 +130,7 @@ git archive \
   HEAD
 ```
 
-Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.1`, `v0.1.1`, ecc.).
+Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.1`, `v0.1.2`, ecc.).
 
 # Installazione su Google Chrome
 
@@ -139,7 +139,7 @@ Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre 
 Scaricare:
 
 ```text
-wildix-meet-audio-bridge-v0.1.1.zip
+wildix-meet-audio-bridge-v0.1.2.zip
 ```
 
 e decomprimerlo in una posizione permanente.
@@ -195,7 +195,7 @@ manifest.json
 Ad esempio:
 
 ```text
-wildix-meet-audio-bridge-v0.1.1/
+wildix-meet-audio-bridge-v0.1.2/
 ├── manifest.json
 ├── README.md
 └── src/
@@ -242,7 +242,7 @@ Se il microfono Meet era già disattivato prima della telefonata, deve rimanere 
 Quando viene pubblicata una nuova versione, ad esempio:
 
 ```text
-v0.1.1
+v0.1.2
 ```
 
 scaricare e decomprimere il nuovo ZIP.
@@ -294,6 +294,20 @@ service worker
 per visualizzare la Console di `background.js`.
 
 # Versioni
+
+## v0.1.2
+
+Versione di robustezza per l'utilizzo con piu utenti.
+
+Modifiche:
+
+- stato Wildix occupato immediato e stato libero con debounce di 1 secondo;
+- operazioni mute/unmute serializzate nel service worker per evitare race condition;
+- verifica dello stato reale del microfono Meet dopo ogni comando;
+- retry automatici sul microfono Meet;
+- verifica dello stato reale dell'audio della scheda Meet;
+- conservazione dello stato originale di microfono e audio per il ripristino;
+- log con numero di versione e conferma delle singole operazioni.
 
 ## v0.1.1
 
