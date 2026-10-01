@@ -2,11 +2,20 @@
   let originalMicMuted = null;
   let managed = false;
 
-  function getMicState() {
-    const controls =
+  function getControlsRoot() {
+    return (
       document.querySelector(
         '[role="region"][aria-label="Controlli di chiamata"]'
-      ) || document;
+      ) ||
+      document.querySelector(
+        '[role="region"][aria-label="Call controls"]'
+      ) ||
+      document
+    );
+  }
+
+  function getMicState() {
+    const controls = getControlsRoot();
 
     const muteButton =
       controls.querySelector(
@@ -64,7 +73,6 @@
       console.log(
         "[Wildix Meet Audio Bridge] Disattivo microfono Meet"
       );
-
       mic.button.click();
     }
 
@@ -96,7 +104,6 @@
       console.log(
         "[Wildix Meet Audio Bridge] Riattivo microfono Meet"
       );
-
       mic.button.click();
     }
 
@@ -104,7 +111,6 @@
       console.log(
         "[Wildix Meet Audio Bridge] Ripristino microfono Meet mutato"
       );
-
       mic.button.click();
     }
 
