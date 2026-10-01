@@ -1,4 +1,38 @@
+const VERSION = chrome.runtime.getManifest().version;
+const PREFIX = `[Wildix Meet Audio Bridge v${VERSION}]`;
+
 const MEET_URL = "https://meet.google.com/*";
+const TAB_VERIFY_ATTEMPTS = 3;
+const TAB_VERIFY_DELAY_MS = 150;
+
+let operationQueue = Promise.resolve();
+
+const sleep = ms =>
+  new Promise(resolve => setTimeout(resolve, ms));
+
+function enqueueOperation(label, operation) {
+  const run = async () => {
+    console.log(
+      `${PREFIX} Operazione: ${label}`
+    );
+
+    return operation();
+  };
+
+  const result = operationQueue.then(
+    run,
+    run
+  );
+
+  operationQueue = result.catch(error => {
+    console.error(
+      `${PREFIX} Operazione fallita: ${label}`,
+      error
+    );
+  });
+
+  return result;
+}
 
 async function getSessionState() {
   const result = await chrome.storage.session.get([
@@ -12,6 +46,61 @@ async function getSessionState() {
     wildixStates: result.wildixStates ?? {},
     meetStates: result.meetStates ?? {}
   };
+}
+
+async function setTabMuted(tabId, targetMuted) {
+  for (
+    let attempt = 1;
+    attempt <= TAB_VERIFY_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      let tab = await chrome.tabs.get(tabId);
+      const currentMuted =
+        Boolean(tab.mutedInfo?.muted);
+
+      if (currentMuted === targetMuted) {
+        console.log(
+          `${PREFIX} Tab Meet ${tabId}: audio confermato ${targetMuted ? "MUTED" : "UNMUTED"}`
+        );
+        return true;
+      }
+
+      await chrome.tabs.update(tabId, {
+        muted: targetMuted
+      });
+
+      await sleep(TAB_VERIFY_DELAY_MS);
+
+      tab = await chrome.tabs.get(tabId);
+
+      if (
+        Boolean(tab.mutedInfo?.muted) === targetMuted
+      ) {
+        console.log(
+          `${PREFIX} Tab Meet ${tabId}: audio confermato ${targetMuted ? "MUTED" : "UNMUTED"}`
+        );
+        return true;
+      }
+    } catch (error) {
+      console.warn(
+        `${PREFIX} Tab Meet ${tabId}: impossibile modificare/verificare l'audio`,
+        error
+      );
+
+      return false;
+    }
+
+    console.warn(
+      `${PREFIX} Tab Meet ${tabId}: audio non confermato, tentativo ${attempt}/${TAB_VERIFY_ATTEMPTS}`
+    );
+  }
+
+  console.error(
+    `${PREFIX} Tab Meet ${tabId}: impossibile portare l'audio nello stato richiesto`
+  );
+
+  return false;
 }
 
 async function setWildixTabState(tabId, busy) {
@@ -35,9 +124,7 @@ async function setWildixTabState(tabId, busy) {
   }
 
   console.log(
-    `[Wildix Meet Audio Bridge] Wildix globale: ${
-      globalBusy ? "OCCUPATO" : "LIBERO"
-    }`
+    `${PREFIX} Wildix globale: ${globalBusy ? "OCCUPATO" : "LIBERO"}`
   );
 
   if (globalBusy) {
@@ -61,8 +148,27 @@ async function muteMeet() {
     }
 
     const key = String(tab.id);
-    const alreadyManaged = Boolean(meetStates[key]);
 
+    if (!meetStates[key]) {
+      meetStates[key] = {
+        tabWasMuted: Boolean(
+          tab.mutedInfo?.muted
+        ),
+        micWasMuted: null
+      };
+    }
+  }
+
+  await chrome.storage.session.set({
+    meetStates
+  });
+
+  for (const tab of tabs) {
+    if (!tab.id) {
+      continue;
+    }
+
+    const key = String(tab.id);
     let micResult = null;
 
     try {
@@ -72,33 +178,35 @@ async function muteMeet() {
           type: "FORCE_MUTE_MEET"
         }
       );
+
+      if (micResult?.ok) {
+        console.log(
+          `${PREFIX} Tab Meet ${tab.id}: microfono confermato MUTED`
+        );
+      } else {
+        console.warn(
+          `${PREFIX} Tab Meet ${tab.id}: mute microfono non confermato`
+        );
+      }
     } catch (error) {
       console.warn(
-        "[Wildix Meet Audio Bridge] Meet non ancora pronto:",
+        `${PREFIX} Tab Meet ${tab.id}: content script Meet non pronto`,
         error
       );
     }
 
-    if (!alreadyManaged) {
-      meetStates[key] = {
-        tabWasMuted: Boolean(tab.mutedInfo?.muted),
-        micWasMuted:
-          typeof micResult?.wasMuted === "boolean"
-            ? micResult.wasMuted
-            : null
-      };
+    if (
+      meetStates[key].micWasMuted === null &&
+      typeof micResult?.wasMuted === "boolean"
+    ) {
+      meetStates[key].micWasMuted =
+        micResult.wasMuted;
     }
 
-    try {
-      await chrome.tabs.update(tab.id, {
-        muted: true
-      });
-    } catch (error) {
-      console.warn(
-        "[Wildix Meet Audio Bridge] Impossibile silenziare tab Meet:",
-        error
-      );
-    }
+    await setTabMuted(
+      tab.id,
+      true
+    );
   }
 
   await chrome.storage.session.set({
@@ -108,31 +216,43 @@ async function muteMeet() {
 
 async function restoreMeet() {
   const state = await getSessionState();
-
-  for (const [tabIdString, saved] of Object.entries(
+  const entries = Object.entries(
     state.meetStates
-  )) {
+  );
+
+  for (const [tabIdString, saved] of entries) {
     const tabId = Number(tabIdString);
 
     try {
-      await chrome.tabs.update(tabId, {
-        muted: saved.tabWasMuted
-      });
-    } catch {
-      // Tab chiusa nel frattempo.
+      const micResult =
+        await chrome.tabs.sendMessage(
+          tabId,
+          {
+            type: "RESTORE_MEET",
+            wasMicMuted: saved.micWasMuted
+          }
+        );
+
+      if (micResult?.ok) {
+        console.log(
+          `${PREFIX} Tab Meet ${tabId}: microfono ripristinato`
+        );
+      } else {
+        console.warn(
+          `${PREFIX} Tab Meet ${tabId}: ripristino microfono non confermato`
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `${PREFIX} Tab Meet ${tabId}: impossibile ripristinare il microfono`,
+        error
+      );
     }
 
-    try {
-      await chrome.tabs.sendMessage(
-        tabId,
-        {
-          type: "RESTORE_MEET",
-          wasMicMuted: saved.micWasMuted
-        }
-      );
-    } catch {
-      // Tab Meet chiusa o ricaricata.
-    }
+    await setTabMuted(
+      tabId,
+      Boolean(saved.tabWasMuted)
+    );
   }
 
   await chrome.storage.session.set({
@@ -140,60 +260,38 @@ async function restoreMeet() {
   });
 }
 
-chrome.runtime.onMessage.addListener(
-  (message, sender, sendResponse) => {
-    if (
-      message.type === "WILDIX_STATE_CHANGED" &&
-      sender.tab?.id
-    ) {
-      setWildixTabState(
-        sender.tab.id,
-        message.busy
-      )
-        .then(() => sendResponse({ ok: true }))
-        .catch(error => {
-          console.error(error);
-          sendResponse({ ok: false });
-        });
-
-      return true;
-    }
-
-    if (
-      message.type === "MEET_READY" &&
-      sender.tab?.id
-    ) {
-      getSessionState()
-        .then(async state => {
-          if (state.wildixBusy) {
-            await muteMeet();
-          }
-
-          sendResponse({ ok: true });
-        })
-        .catch(error => {
-          console.error(error);
-          sendResponse({ ok: false });
-        });
-
-      return true;
-    }
-  }
-);
-
-chrome.tabs.onRemoved.addListener(async tabId => {
+async function handleMeetReady(tabId) {
   const state = await getSessionState();
 
-  delete state.meetStates[String(tabId)];
+  if (state.wildixBusy) {
+    console.log(
+      `${PREFIX} Meet ${tabId} pronto mentre Wildix e occupato: riallineo lo stato`
+    );
 
-  if (Object.prototype.hasOwnProperty.call(
-    state.wildixStates,
-    String(tabId)
-  )) {
-    delete state.wildixStates[String(tabId)];
+    await muteMeet();
+  }
+}
+
+async function handleRemovedTab(tabId) {
+  const state = await getSessionState();
+  const key = String(tabId);
+
+  delete state.meetStates[key];
+
+  if (
+    Object.prototype.hasOwnProperty.call(
+      state.wildixStates,
+      key
+    )
+  ) {
+    const wasBusy = state.wildixBusy;
+
+    delete state.wildixStates[key];
 
     const globalBusy =
-      Object.values(state.wildixStates).some(Boolean);
+      Object.values(
+        state.wildixStates
+      ).some(Boolean);
 
     await chrome.storage.session.set({
       wildixStates: state.wildixStates,
@@ -201,7 +299,7 @@ chrome.tabs.onRemoved.addListener(async tabId => {
       meetStates: state.meetStates
     });
 
-    if (!globalBusy && state.wildixBusy) {
+    if (!globalBusy && wasBusy) {
       await restoreMeet();
     }
 
@@ -211,4 +309,88 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   await chrome.storage.session.set({
     meetStates: state.meetStates
   });
-});
+}
+
+chrome.runtime.onMessage.addListener(
+  (message, sender, sendResponse) => {
+    if (
+      message.type === "WILDIX_STATE_CHANGED" &&
+      sender.tab?.id
+    ) {
+      enqueueOperation(
+        `Wildix tab ${sender.tab.id} -> ${message.busy ? "BUSY" : "FREE"}`,
+        () =>
+          setWildixTabState(
+            sender.tab.id,
+            message.busy
+          )
+      )
+        .then(() => {
+          sendResponse({
+            ok: true
+          });
+        })
+        .catch(error => {
+          console.error(
+            `${PREFIX} Errore gestione stato Wildix`,
+            error
+          );
+
+          sendResponse({
+            ok: false
+          });
+        });
+
+      return true;
+    }
+
+    if (
+      message.type === "MEET_READY" &&
+      sender.tab?.id
+    ) {
+      enqueueOperation(
+        `Meet tab ${sender.tab.id} ready`,
+        () =>
+          handleMeetReady(
+            sender.tab.id
+          )
+      )
+        .then(() => {
+          sendResponse({
+            ok: true
+          });
+        })
+        .catch(error => {
+          console.error(
+            `${PREFIX} Errore gestione MEET_READY`,
+            error
+          );
+
+          sendResponse({
+            ok: false
+          });
+        });
+
+      return true;
+    }
+  }
+);
+
+chrome.tabs.onRemoved.addListener(
+  tabId => {
+    enqueueOperation(
+      `Tab ${tabId} removed`,
+      () =>
+        handleRemovedTab(tabId)
+    ).catch(error => {
+      console.error(
+        `${PREFIX} Errore gestione chiusura tab`,
+        error
+      );
+    });
+  }
+);
+
+console.log(
+  `${PREFIX} Service worker avviato`
+);
