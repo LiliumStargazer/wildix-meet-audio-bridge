@@ -61,19 +61,19 @@ git push origin main
 
 Prima di creare il pacchetto assicurarsi che tutte le modifiche siano state salvate su `main`.
 
-Esempio per la versione `0.1.2`:
+Esempio per la versione `0.1.3`:
 
 ```bash
 git add .
-git commit -m "Release v0.1.1"
+git commit -m "Release v0.1.3"
 git push origin main
 ```
 
 Creare quindi il tag:
 
 ```bash
-git tag -a v0.1.2 -m "v0.1.2"
-git push origin v0.1.2
+git tag -a v0.1.3 -m "v0.1.3"
+git push origin v0.1.3
 ```
 
 ## Creazione dello ZIP
@@ -91,21 +91,21 @@ Creare il pacchetto partendo dal tag:
 ```bash
 git archive \
   --format=zip \
-  --prefix=wildix-meet-audio-bridge-v0.1.2/ \
-  --output=dist/wildix-meet-audio-bridge-v0.1.2.zip \
-  v0.1.2
+  --prefix=wildix-meet-audio-bridge-v0.1.3/ \
+  --output=dist/wildix-meet-audio-bridge-v0.1.3.zip \
+  v0.1.3
 ```
 
 Controllare il contenuto:
 
 ```bash
-unzip -l dist/wildix-meet-audio-bridge-v0.1.2.zip
+unzip -l dist/wildix-meet-audio-bridge-v0.1.3.zip
 ```
 
 Il file risultante sarà:
 
 ```text
-dist/wildix-meet-audio-bridge-v0.1.2.zip
+dist/wildix-meet-audio-bridge-v0.1.3.zip
 ```
 
 È consigliato aggiungere `dist/` al `.gitignore`:
@@ -130,7 +130,7 @@ git archive \
   HEAD
 ```
 
-Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.1`, `v0.1.2`, ecc.).
+Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.1`, `v0.1.3`, ecc.).
 
 # Installazione su Google Chrome
 
@@ -139,7 +139,7 @@ Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre 
 Scaricare:
 
 ```text
-wildix-meet-audio-bridge-v0.1.2.zip
+wildix-meet-audio-bridge-v0.1.3.zip
 ```
 
 e decomprimerlo in una posizione permanente.
@@ -195,7 +195,7 @@ manifest.json
 Ad esempio:
 
 ```text
-wildix-meet-audio-bridge-v0.1.2/
+wildix-meet-audio-bridge-v0.1.3/
 ├── manifest.json
 ├── README.md
 └── src/
@@ -242,7 +242,7 @@ Se il microfono Meet era già disattivato prima della telefonata, deve rimanere 
 Quando viene pubblicata una nuova versione, ad esempio:
 
 ```text
-v0.1.2
+v0.1.3
 ```
 
 scaricare e decomprimere il nuovo ZIP.
@@ -294,6 +294,20 @@ service worker
 per visualizzare la Console di `background.js`.
 
 # Versioni
+
+## v0.1.3
+
+Correzione del ripristino dello stato di Google Meet al termine della chiamata Wildix.
+
+Modifiche:
+
+- lo stato salvato di Meet non viene piu cancellato finche microfono e audio non risultano realmente ripristinati;
+- retry multipli del ripristino al termine della chiamata;
+- selezione del pulsante microfono limitata ai controlli visibili e abilitati;
+- supporto a etichette Meet con testo aggiuntivo tramite selettori per prefisso;
+- conservazione dello stato originale del microfono anche attraverso tentativi successivi;
+- nuovo tentativo automatico quando Meet viene ricaricato e risulta ancora un restore pendente;
+- limite temporale ai retry per evitare un unmute tardivo e inatteso.
 
 ## v0.1.2
 
