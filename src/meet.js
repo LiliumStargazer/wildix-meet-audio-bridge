@@ -2,10 +2,10 @@
   const VERSION = chrome.runtime.getManifest().version;
   const PREFIX = `[Wildix Meet Audio Bridge v${VERSION}]`;
 
-  const FIND_TIMEOUT_MS = 1500;
-  const VERIFY_TIMEOUT_MS = 1000;
+  const FIND_TIMEOUT_MS = 1200;
+  const VERIFY_TIMEOUT_MS = 700;
   const POLL_INTERVAL_MS = 100;
-  const MAX_SET_ATTEMPTS = 3;
+  const MAX_SET_ATTEMPTS = 4;
 
   let originalMicMuted = null;
   let managed = false;
@@ -13,28 +13,64 @@
   const sleep = ms =>
     new Promise(resolve => setTimeout(resolve, ms));
 
-  function getControlsRoot() {
-    return (
-      document.querySelector(
-        '[role="region"][aria-label="Controlli di chiamata"]'
-      ) ||
-      document.querySelector(
-        '[role="region"][aria-label="Call controls"]'
-      ) ||
-      document
+  function isUsableButton(button) {
+    if (
+      !button ||
+      !button.isConnected ||
+      button.disabled ||
+      button.getAttribute("aria-disabled") === "true" ||
+      button.getAttribute("aria-hidden") === "true"
+    ) {
+      return false;
+    }
+
+    const style = window.getComputedStyle(button);
+
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden"
+    ) {
+      return false;
+    }
+
+    return button.getClientRects().length > 0;
+  }
+
+  function getControlRoots() {
+    const roots = Array.from(
+      document.querySelectorAll(
+        '[role="region"][aria-label*="Controlli di chiamata"],' +
+        '[role="region"][aria-label*="Call controls"]'
+      )
     );
+
+    return roots.length > 0
+      ? roots
+      : [document];
+  }
+
+  function findButton(selectors) {
+    for (const root of getControlRoots()) {
+      for (const selector of selectors) {
+        const buttons =
+          root.querySelectorAll(selector);
+
+        for (const button of buttons) {
+          if (isUsableButton(button)) {
+            return button;
+          }
+        }
+      }
+    }
+
+    return null;
   }
 
   function getMicState() {
-    const controls = getControlsRoot();
-
-    const muteButton =
-      controls.querySelector(
-        'button[aria-label="Disattiva microfono"]'
-      ) ||
-      controls.querySelector(
-        'button[aria-label="Turn off microphone"]'
-      );
+    const muteButton = findButton([
+      'button[aria-label^="Disattiva microfono"]',
+      'button[aria-label^="Turn off microphone"]'
+    ]);
 
     if (muteButton) {
       return {
@@ -43,13 +79,10 @@
       };
     }
 
-    const unmuteButton =
-      controls.querySelector(
-        'button[aria-label="Attiva microfono"]'
-      ) ||
-      controls.querySelector(
-        'button[aria-label="Turn on microphone"]'
-      );
+    const unmuteButton = findButton([
+      'button[aria-label^="Attiva microfono"]',
+      'button[aria-label^="Turn on microphone"]'
+    ]);
 
     if (unmuteButton) {
       return {
@@ -138,6 +171,8 @@
       console.warn(
         `${PREFIX} Cambio stato microfono non confermato, ritento`
       );
+
+      await sleep(POLL_INTERVAL_MS);
     }
 
     console.error(
@@ -147,8 +182,9 @@
     return false;
   }
 
-  async function muteMeetMic() {
-    const initialMic = await waitForMicAvailable();
+  async function muteMeetMic(captureOriginal) {
+    const initialMic =
+      await waitForMicAvailable();
 
     if (!initialMic) {
       console.warn(
@@ -157,24 +193,29 @@
 
       return {
         ok: false,
-        wasMuted: null
+        wasMuted: originalMicMuted
       };
     }
 
-    if (!managed) {
+    if (captureOriginal && !managed) {
       originalMicMuted = initialMic.muted;
       managed = true;
 
       console.log(
         `${PREFIX} Stato microfono iniziale: ${originalMicMuted ? "MUTED" : "UNMUTED"}`
       );
+    } else if (!managed) {
+      managed = true;
     }
 
     const ok = await setMicMuted(true);
 
     return {
       ok,
-      wasMuted: originalMicMuted
+      wasMuted:
+        typeof originalMicMuted === "boolean"
+          ? originalMicMuted
+          : null
     };
   }
 
@@ -198,7 +239,8 @@
       `${PREFIX} Ripristino microfono a ${targetMuted ? "MUTED" : "UNMUTED"}`
     );
 
-    const ok = await setMicMuted(targetMuted);
+    const ok =
+      await setMicMuted(targetMuted);
 
     if (ok) {
       managed = false;
@@ -213,7 +255,9 @@
   chrome.runtime.onMessage.addListener(
     (message, sender, sendResponse) => {
       if (message.type === "FORCE_MUTE_MEET") {
-        muteMeetMic()
+        muteMeetMic(
+          message.captureOriginal === true
+        )
           .then(sendResponse)
           .catch(error => {
             console.error(
@@ -223,7 +267,10 @@
 
             sendResponse({
               ok: false,
-              wasMuted: originalMicMuted
+              wasMuted:
+                typeof originalMicMuted === "boolean"
+                  ? originalMicMuted
+                  : null
             });
           });
 
@@ -231,7 +278,9 @@
       }
 
       if (message.type === "RESTORE_MEET") {
-        restoreMeetMic(message.wasMicMuted)
+        restoreMeetMic(
+          message.wasMicMuted
+        )
           .then(sendResponse)
           .catch(error => {
             console.error(
