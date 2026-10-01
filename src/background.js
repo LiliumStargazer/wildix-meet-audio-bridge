@@ -5,6 +5,10 @@ const MEET_URL = "https://meet.google.com/*";
 const TAB_VERIFY_ATTEMPTS = 3;
 const TAB_VERIFY_DELAY_MS = 150;
 
+const RESTORE_ROUNDS = 4;
+const RESTORE_RETRY_DELAY_MS = 500;
+const RESTORE_MAX_AGE_MS = 15000;
+
 let operationQueue = Promise.resolve();
 
 const sleep = ms =>
@@ -35,51 +39,75 @@ function enqueueOperation(label, operation) {
 }
 
 async function getSessionState() {
-  const result = await chrome.storage.session.get([
-    "wildixBusy",
-    "wildixStates",
-    "meetStates"
-  ]);
+  const result =
+    await chrome.storage.session.get([
+      "wildixBusy",
+      "wildixStates",
+      "meetStates"
+    ]);
 
   return {
-    wildixBusy: result.wildixBusy ?? false,
-    wildixStates: result.wildixStates ?? {},
-    meetStates: result.meetStates ?? {}
+    wildixBusy:
+      result.wildixBusy ?? false,
+    wildixStates:
+      result.wildixStates ?? {},
+    meetStates:
+      result.meetStates ?? {}
   };
 }
 
-async function setTabMuted(tabId, targetMuted) {
+async function saveMeetStates(meetStates) {
+  await chrome.storage.session.set({
+    meetStates
+  });
+}
+
+async function setTabMuted(
+  tabId,
+  targetMuted
+) {
   for (
     let attempt = 1;
     attempt <= TAB_VERIFY_ATTEMPTS;
     attempt += 1
   ) {
     try {
-      let tab = await chrome.tabs.get(tabId);
-      const currentMuted =
-        Boolean(tab.mutedInfo?.muted);
-
-      if (currentMuted === targetMuted) {
-        console.log(
-          `${PREFIX} Tab Meet ${tabId}: audio confermato ${targetMuted ? "MUTED" : "UNMUTED"}`
-        );
-        return true;
-      }
-
-      await chrome.tabs.update(tabId, {
-        muted: targetMuted
-      });
-
-      await sleep(TAB_VERIFY_DELAY_MS);
-
-      tab = await chrome.tabs.get(tabId);
+      let tab =
+        await chrome.tabs.get(tabId);
 
       if (
-        Boolean(tab.mutedInfo?.muted) === targetMuted
+        Boolean(tab.mutedInfo?.muted) ===
+        targetMuted
       ) {
         console.log(
           `${PREFIX} Tab Meet ${tabId}: audio confermato ${targetMuted ? "MUTED" : "UNMUTED"}`
         );
+
+        return true;
+      }
+
+      await chrome.tabs.update(
+        tabId,
+        {
+          muted: targetMuted
+        }
+      );
+
+      await sleep(
+        TAB_VERIFY_DELAY_MS
+      );
+
+      tab =
+        await chrome.tabs.get(tabId);
+
+      if (
+        Boolean(tab.mutedInfo?.muted) ===
+        targetMuted
+      ) {
+        console.log(
+          `${PREFIX} Tab Meet ${tabId}: audio confermato ${targetMuted ? "MUTED" : "UNMUTED"}`
+        );
+
         return true;
       }
     } catch (error) {
@@ -103,23 +131,43 @@ async function setTabMuted(tabId, targetMuted) {
   return false;
 }
 
-async function setWildixTabState(tabId, busy) {
-  const state = await getSessionState();
+async function setWildixTabState(
+  tabId,
+  busy
+) {
+  const state =
+    await getSessionState();
 
-  state.wildixStates[String(tabId)] = busy;
+  state.wildixStates[
+    String(tabId)
+  ] = busy;
 
   const globalBusy =
-    Object.values(state.wildixStates).some(Boolean);
+    Object.values(
+      state.wildixStates
+    ).some(Boolean);
 
   const changed =
-    globalBusy !== state.wildixBusy;
+    globalBusy !==
+    state.wildixBusy;
 
   await chrome.storage.session.set({
-    wildixStates: state.wildixStates,
-    wildixBusy: globalBusy
+    wildixStates:
+      state.wildixStates,
+    wildixBusy:
+      globalBusy
   });
 
   if (!changed) {
+    if (
+      !globalBusy &&
+      Object.keys(
+        state.meetStates
+      ).length > 0
+    ) {
+      await restoreMeet();
+    }
+
     return;
   }
 
@@ -135,49 +183,90 @@ async function setWildixTabState(tabId, busy) {
 }
 
 async function muteMeet() {
-  const tabs = await chrome.tabs.query({
-    url: MEET_URL
-  });
+  const tabs =
+    await chrome.tabs.query({
+      url: MEET_URL
+    });
 
-  const state = await getSessionState();
-  const meetStates = state.meetStates;
+  const state =
+    await getSessionState();
+
+  const meetStates =
+    state.meetStates;
 
   for (const tab of tabs) {
     if (!tab.id) {
       continue;
     }
 
-    const key = String(tab.id);
+    const key =
+      String(tab.id);
 
     if (!meetStates[key]) {
       meetStates[key] = {
-        tabWasMuted: Boolean(
-          tab.mutedInfo?.muted
-        ),
-        micWasMuted: null
+        tabWasMuted:
+          Boolean(
+            tab.mutedInfo?.muted
+          ),
+        micWasMuted: null,
+        micCaptureAttempted: false,
+        restoreStartedAt: null
       };
+    } else {
+      meetStates[key].restoreStartedAt =
+        null;
+    }
+
+    if (
+      meetStates[key]
+        .micCaptureAttempted !== true
+    ) {
+      meetStates[key]
+        .micCaptureAttempted = true;
     }
   }
 
-  await chrome.storage.session.set({
+  await saveMeetStates(
     meetStates
-  });
+  );
 
   for (const tab of tabs) {
     if (!tab.id) {
       continue;
     }
 
-    const key = String(tab.id);
+    const key =
+      String(tab.id);
+
+    const saved =
+      meetStates[key];
+
+    const captureOriginal =
+      saved.micWasMuted === null &&
+      saved.micCaptureAttempted === true &&
+      saved.micCaptureCompleted !== true;
+
+    if (captureOriginal) {
+      saved.micCaptureCompleted =
+        true;
+
+      await saveMeetStates(
+        meetStates
+      );
+    }
+
     let micResult = null;
 
     try {
-      micResult = await chrome.tabs.sendMessage(
-        tab.id,
-        {
-          type: "FORCE_MUTE_MEET"
-        }
-      );
+      micResult =
+        await chrome.tabs.sendMessage(
+          tab.id,
+          {
+            type:
+              "FORCE_MUTE_MEET",
+            captureOriginal
+          }
+        );
 
       if (micResult?.ok) {
         console.log(
@@ -196,10 +285,11 @@ async function muteMeet() {
     }
 
     if (
-      meetStates[key].micWasMuted === null &&
-      typeof micResult?.wasMuted === "boolean"
+      saved.micWasMuted === null &&
+      typeof micResult?.wasMuted ===
+        "boolean"
     ) {
-      meetStates[key].micWasMuted =
+      saved.micWasMuted =
         micResult.wasMuted;
     }
 
@@ -207,61 +297,199 @@ async function muteMeet() {
       tab.id,
       true
     );
-  }
 
-  await chrome.storage.session.set({
-    meetStates
-  });
+    await saveMeetStates(
+      meetStates
+    );
+  }
 }
 
 async function restoreMeet() {
-  const state = await getSessionState();
-  const entries = Object.entries(
-    state.meetStates
-  );
+  for (
+    let round = 1;
+    round <= RESTORE_ROUNDS;
+    round += 1
+  ) {
+    const state =
+      await getSessionState();
 
-  for (const [tabIdString, saved] of entries) {
-    const tabId = Number(tabIdString);
-
-    try {
-      const micResult =
-        await chrome.tabs.sendMessage(
-          tabId,
-          {
-            type: "RESTORE_MEET",
-            wasMicMuted: saved.micWasMuted
-          }
-        );
-
-      if (micResult?.ok) {
-        console.log(
-          `${PREFIX} Tab Meet ${tabId}: microfono ripristinato`
-        );
-      } else {
-        console.warn(
-          `${PREFIX} Tab Meet ${tabId}: ripristino microfono non confermato`
-        );
-      }
-    } catch (error) {
-      console.warn(
-        `${PREFIX} Tab Meet ${tabId}: impossibile ripristinare il microfono`,
-        error
+    if (state.wildixBusy) {
+      console.log(
+        `${PREFIX} Restore annullato: Wildix e nuovamente occupato`
       );
+
+      return false;
     }
 
-    await setTabMuted(
-      tabId,
-      Boolean(saved.tabWasMuted)
+    const meetStates =
+      state.meetStates;
+
+    const entries =
+      Object.entries(
+        meetStates
+      );
+
+    if (entries.length === 0) {
+      return true;
+    }
+
+    const now =
+      Date.now();
+
+    for (
+      const [
+        tabIdString,
+        saved
+      ] of entries
+    ) {
+      if (!saved.restoreStartedAt) {
+        saved.restoreStartedAt =
+          now;
+      }
+
+      if (
+        now -
+          saved.restoreStartedAt >
+        RESTORE_MAX_AGE_MS
+      ) {
+        console.error(
+          `${PREFIX} Tab Meet ${tabIdString}: restore scaduto, interrompo i tentativi per evitare modifiche tardive`
+        );
+
+        delete meetStates[
+          tabIdString
+        ];
+      }
+    }
+
+    await saveMeetStates(
+      meetStates
     );
+
+    const activeEntries =
+      Object.entries(
+        meetStates
+      );
+
+    if (
+      activeEntries.length === 0
+    ) {
+      return false;
+    }
+
+    for (
+      const [
+        tabIdString,
+        saved
+      ] of activeEntries
+    ) {
+      const tabId =
+        Number(tabIdString);
+
+      let micRestored = false;
+
+      try {
+        const micResult =
+          await chrome.tabs.sendMessage(
+            tabId,
+            {
+              type:
+                "RESTORE_MEET",
+              wasMicMuted:
+                saved.micWasMuted
+            }
+          );
+
+        micRestored =
+          micResult?.ok === true;
+
+        if (micRestored) {
+          console.log(
+            `${PREFIX} Tab Meet ${tabId}: microfono ripristinato`
+          );
+        } else {
+          console.warn(
+            `${PREFIX} Tab Meet ${tabId}: ripristino microfono non confermato`
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `${PREFIX} Tab Meet ${tabId}: impossibile ripristinare il microfono`,
+          error
+        );
+      }
+
+      const tabRestored =
+        await setTabMuted(
+          tabId,
+          Boolean(
+            saved.tabWasMuted
+          )
+        );
+
+      if (
+        micRestored &&
+        tabRestored
+      ) {
+        delete meetStates[
+          tabIdString
+        ];
+
+        console.log(
+          `${PREFIX} Tab Meet ${tabId}: stato precedente ripristinato completamente`
+        );
+      }
+    }
+
+    await saveMeetStates(
+      meetStates
+    );
+
+    if (
+      Object.keys(
+        meetStates
+      ).length === 0
+    ) {
+      return true;
+    }
+
+    if (
+      round <
+      RESTORE_ROUNDS
+    ) {
+      console.warn(
+        `${PREFIX} Restore incompleto, nuovo tentativo ${round + 1}/${RESTORE_ROUNDS}`
+      );
+
+      await sleep(
+        RESTORE_RETRY_DELAY_MS
+      );
+    }
   }
 
-  await chrome.storage.session.set({
-    meetStates: {}
-  });
+  const finalState =
+    await getSessionState();
+
+  if (
+    Object.keys(
+      finalState.meetStates
+    ).length > 0
+  ) {
+    console.error(
+      `${PREFIX} Restore ancora incompleto: mantengo lo stato salvato per un successivo tentativo`
+    );
+
+    return false;
+  }
+
+  return true;
 }
 
-async function handleMeetReady(tabId) {
-  const state = await getSessionState();
+async function handleMeetReady(
+  tabId
+) {
+  const state =
+    await getSessionState();
 
   if (state.wildixBusy) {
     console.log(
@@ -269,24 +497,49 @@ async function handleMeetReady(tabId) {
     );
 
     await muteMeet();
+
+    return;
+  }
+
+  if (
+    state.meetStates[
+      String(tabId)
+    ]
+  ) {
+    console.log(
+      `${PREFIX} Meet ${tabId} pronto con restore pendente: riprovo il ripristino`
+    );
+
+    await restoreMeet();
   }
 }
 
-async function handleRemovedTab(tabId) {
-  const state = await getSessionState();
-  const key = String(tabId);
+async function handleRemovedTab(
+  tabId
+) {
+  const state =
+    await getSessionState();
 
-  delete state.meetStates[key];
+  const key =
+    String(tabId);
+
+  delete state.meetStates[
+    key
+  ];
 
   if (
-    Object.prototype.hasOwnProperty.call(
-      state.wildixStates,
-      key
-    )
+    Object.prototype
+      .hasOwnProperty.call(
+        state.wildixStates,
+        key
+      )
   ) {
-    const wasBusy = state.wildixBusy;
+    const wasBusy =
+      state.wildixBusy;
 
-    delete state.wildixStates[key];
+    delete state.wildixStates[
+      key
+    ];
 
     const globalBusy =
       Object.values(
@@ -294,27 +547,38 @@ async function handleRemovedTab(tabId) {
       ).some(Boolean);
 
     await chrome.storage.session.set({
-      wildixStates: state.wildixStates,
-      wildixBusy: globalBusy,
-      meetStates: state.meetStates
+      wildixStates:
+        state.wildixStates,
+      wildixBusy:
+        globalBusy,
+      meetStates:
+        state.meetStates
     });
 
-    if (!globalBusy && wasBusy) {
+    if (
+      !globalBusy &&
+      wasBusy
+    ) {
       await restoreMeet();
     }
 
     return;
   }
 
-  await chrome.storage.session.set({
-    meetStates: state.meetStates
-  });
+  await saveMeetStates(
+    state.meetStates
+  );
 }
 
 chrome.runtime.onMessage.addListener(
-  (message, sender, sendResponse) => {
+  (
+    message,
+    sender,
+    sendResponse
+  ) => {
     if (
-      message.type === "WILDIX_STATE_CHANGED" &&
+      message.type ===
+        "WILDIX_STATE_CHANGED" &&
       sender.tab?.id
     ) {
       enqueueOperation(
@@ -345,7 +609,8 @@ chrome.runtime.onMessage.addListener(
     }
 
     if (
-      message.type === "MEET_READY" &&
+      message.type ===
+        "MEET_READY" &&
       sender.tab?.id
     ) {
       enqueueOperation(
@@ -381,7 +646,9 @@ chrome.tabs.onRemoved.addListener(
     enqueueOperation(
       `Tab ${tabId} removed`,
       () =>
-        handleRemovedTab(tabId)
+        handleRemovedTab(
+          tabId
+        )
     ).catch(error => {
       console.error(
         `${PREFIX} Errore gestione chiusura tab`,
