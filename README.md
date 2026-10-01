@@ -65,15 +65,15 @@ Esempio per la versione `0.1.0`:
 
 ```bash
 git add .
-git commit -m "Release v0.1.0"
+git commit -m "Release v0.1.1"
 git push origin main
 ```
 
 Creare quindi il tag:
 
 ```bash
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+git tag -a v0.1.1 -m "v0.1.1"
+git push origin v0.1.1
 ```
 
 ## Creazione dello ZIP
@@ -91,21 +91,21 @@ Creare il pacchetto partendo dal tag:
 ```bash
 git archive \
   --format=zip \
-  --prefix=wildix-meet-audio-bridge-v0.1.0/ \
-  --output=dist/wildix-meet-audio-bridge-v0.1.0.zip \
-  v0.1.0
+  --prefix=wildix-meet-audio-bridge-v0.1.1/ \
+  --output=dist/wildix-meet-audio-bridge-v0.1.1.zip \
+  v0.1.1
 ```
 
 Controllare il contenuto:
 
 ```bash
-unzip -l dist/wildix-meet-audio-bridge-v0.1.0.zip
+unzip -l dist/wildix-meet-audio-bridge-v0.1.1.zip
 ```
 
 Il file risultante sarà:
 
 ```text
-dist/wildix-meet-audio-bridge-v0.1.0.zip
+dist/wildix-meet-audio-bridge-v0.1.1.zip
 ```
 
 È consigliato aggiungere `dist/` al `.gitignore`:
@@ -130,7 +130,7 @@ git archive \
   HEAD
 ```
 
-Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.0`, `v0.1.1`, ecc.).
+Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.1`, `v0.1.1`, ecc.).
 
 # Installazione su Google Chrome
 
@@ -139,7 +139,7 @@ Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre 
 Scaricare:
 
 ```text
-wildix-meet-audio-bridge-v0.1.0.zip
+wildix-meet-audio-bridge-v0.1.1.zip
 ```
 
 e decomprimerlo in una posizione permanente.
@@ -195,7 +195,7 @@ manifest.json
 Ad esempio:
 
 ```text
-wildix-meet-audio-bridge-v0.1.0/
+wildix-meet-audio-bridge-v0.1.1/
 ├── manifest.json
 ├── README.md
 └── src/
@@ -294,6 +294,16 @@ service worker
 per visualizzare la Console di `background.js`.
 
 # Versioni
+
+## v0.1.1
+
+Correzione del controllo del microfono Google Meet per evitare commutazioni ripetute durante una chiamata Wildix.
+
+Modifiche:
+
+- rimosso il MutationObserver che forzava continuamente il mute;
+- limitata la ricerca del pulsante microfono ai controlli della propria chiamata Meet;
+- mantenuto il ripristino dello stato precedente del microfono e dell'audio.
 
 ## v0.1.0
 
