@@ -1,12 +1,20 @@
 (() => {
-  let forcedMute = false;
   let originalMicMuted = null;
-  let checkTimer = null;
+  let managed = false;
 
   function getMicState() {
+    const controls =
+      document.querySelector(
+        '[role="region"][aria-label="Controlli di chiamata"]'
+      ) || document;
+
     const muteButton =
-      document.querySelector('button[aria-label="Disattiva microfono"]') ||
-      document.querySelector('button[aria-label="Turn off microphone"]');
+      controls.querySelector(
+        'button[aria-label="Disattiva microfono"]'
+      ) ||
+      controls.querySelector(
+        'button[aria-label="Turn off microphone"]'
+      );
 
     if (muteButton) {
       return {
@@ -16,8 +24,12 @@
     }
 
     const unmuteButton =
-      document.querySelector('button[aria-label="Attiva microfono"]') ||
-      document.querySelector('button[aria-label="Turn on microphone"]');
+      controls.querySelector(
+        'button[aria-label="Attiva microfono"]'
+      ) ||
+      controls.querySelector(
+        'button[aria-label="Turn on microphone"]'
+      );
 
     if (unmuteButton) {
       return {
@@ -29,20 +41,7 @@
     return null;
   }
 
-  function ensureMuted() {
-    if (!forcedMute) {
-      return;
-    }
-
-    const mic = getMicState();
-
-    if (mic && !mic.muted) {
-      console.log("[Wildix Meet Audio Bridge] Forzo mute microfono Meet");
-      mic.button.click();
-    }
-  }
-
-  function enableForcedMute() {
+  function muteMeetMic() {
     const mic = getMicState();
 
     if (!mic) {
@@ -56,19 +55,18 @@
       };
     }
 
-    if (!forcedMute) {
+    if (!managed) {
       originalMicMuted = mic.muted;
+      managed = true;
     }
-
-    forcedMute = true;
 
     if (!mic.muted) {
+      console.log(
+        "[Wildix Meet Audio Bridge] Disattivo microfono Meet"
+      );
+
       mic.button.click();
     }
-
-    console.log(
-      "[Wildix Meet Audio Bridge] Microfono Meet silenziato"
-    );
 
     return {
       ok: true,
@@ -76,15 +74,16 @@
     };
   }
 
-  function restoreMic(wasMuted) {
-    forcedMute = false;
-
+  function restoreMeetMic(wasMuted) {
     const mic = getMicState();
 
     if (!mic) {
       console.warn(
-        "[Wildix Meet Audio Bridge] Impossibile ripristinare il microfono"
+        "[Wildix Meet Audio Bridge] Impossibile ripristinare il microfono Meet"
       );
+
+      managed = false;
+      originalMicMuted = null;
       return;
     }
 
@@ -94,56 +93,44 @@
         : originalMicMuted;
 
     if (targetMuted === false && mic.muted) {
+      console.log(
+        "[Wildix Meet Audio Bridge] Riattivo microfono Meet"
+      );
+
       mic.button.click();
     }
 
     if (targetMuted === true && !mic.muted) {
+      console.log(
+        "[Wildix Meet Audio Bridge] Ripristino microfono Meet mutato"
+      );
+
       mic.button.click();
     }
 
+    managed = false;
     originalMicMuted = null;
-
-    console.log(
-      "[Wildix Meet Audio Bridge] Stato microfono Meet ripristinato"
-    );
   }
 
   chrome.runtime.onMessage.addListener(
     (message, sender, sendResponse) => {
       if (message.type === "FORCE_MUTE_MEET") {
-        sendResponse(enableForcedMute());
+        sendResponse(muteMeetMic());
         return;
       }
 
       if (message.type === "RESTORE_MEET") {
-        restoreMic(message.wasMicMuted);
+        restoreMeetMic(message.wasMicMuted);
         sendResponse({ ok: true });
       }
     }
   );
 
-  const observer = new MutationObserver(() => {
-    if (!forcedMute) {
-      return;
-    }
-
-    clearTimeout(checkTimer);
-
-    checkTimer = setTimeout(() => {
-      ensureMuted();
-    }, 100);
-  });
-
-  observer.observe(document.documentElement, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    attributeFilter: ["aria-label"]
-  });
-
   chrome.runtime.sendMessage({
     type: "MEET_READY"
   });
 
-  console.log("[Wildix Meet Audio Bridge] Monitor Google Meet avviato");
+  console.log(
+    "[Wildix Meet Audio Bridge] Monitor Google Meet avviato"
+  );
 })();
