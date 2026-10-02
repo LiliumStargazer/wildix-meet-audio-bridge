@@ -11,9 +11,11 @@
 
   let previousBusyState = null;
   let freeTimer = null;
+  // Reported by wildix-rtc.js: a call is connected even if the UI changed.
+  let rtcConnected = false;
 
   function isWildixBusy() {
-    return HANGUP_SELECTORS.some(selector =>
+    return rtcConnected || HANGUP_SELECTORS.some(selector =>
       document.querySelector(selector)
     );
   }
@@ -77,6 +79,22 @@
     attributes: true,
     attributeFilter: ["title", "aria-label"]
   });
+
+  window.addEventListener("wildix-meet-bridge:rtc", event => {
+    if (rtcConnected !== (event.detail === true)) {
+      rtcConnected = event.detail === true;
+
+      console.log(
+        `${PREFIX} Chiamata WebRTC ${rtcConnected ? "connessa" : "chiusa"}`
+      );
+    }
+
+    checkWildixState();
+  });
+
+  window.dispatchEvent(
+    new CustomEvent("wildix-meet-bridge:rtc-query")
+  );
 
   checkWildixState();
 

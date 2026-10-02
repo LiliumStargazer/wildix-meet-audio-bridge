@@ -6,7 +6,8 @@
 
   "permissions": [
     "tabs",
-    "storage"
+    "storage",
+    "scripting"
   ],
 
   "host_permissions": [
@@ -19,6 +20,16 @@
   },
 
   "content_scripts": [
+    {
+      "matches": [
+        "https://automaticmachines.wildixin.com/*"
+      ],
+      "js": [
+        "src/wildix-rtc.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://automaticmachines.wildixin.com/*"
