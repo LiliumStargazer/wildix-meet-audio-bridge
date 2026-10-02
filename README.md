@@ -38,6 +38,8 @@ L'architettura dell'estensione è compatibile anche con Google Chrome su Windows
 wildix-meet-audio-bridge/
 ├── manifest.json
 ├── README.md
+├── icons/
+│   └── icon128.png     icona dell'estensione e delle notifiche
 ├── src/
 │   ├── background.js   stato Wildix globale e audio delle schede Meet
 │   ├── meet.js         microfono di Google Meet
@@ -72,19 +74,19 @@ node --test
 
 Prima di creare il pacchetto assicurarsi che tutte le modifiche siano state salvate su `main`.
 
-Esempio per la versione `0.2.0`:
+Esempio per la versione `0.2.1`:
 
 ```bash
 git add .
-git commit -m "Release v0.2.0"
+git commit -m "Release v0.2.1"
 git push origin main
 ```
 
 Creare quindi il tag:
 
 ```bash
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0
+git tag -a v0.2.1 -m "v0.2.1"
+git push origin v0.2.1
 ```
 
 ## Creazione dello ZIP
@@ -102,21 +104,21 @@ Creare il pacchetto partendo dal tag:
 ```bash
 git archive \
   --format=zip \
-  --prefix=wildix-meet-audio-bridge-v0.2.0/ \
-  --output=dist/wildix-meet-audio-bridge-v0.2.0.zip \
-  v0.2.0
+  --prefix=wildix-meet-audio-bridge-v0.2.1/ \
+  --output=dist/wildix-meet-audio-bridge-v0.2.1.zip \
+  v0.2.1
 ```
 
 Controllare il contenuto:
 
 ```bash
-unzip -l dist/wildix-meet-audio-bridge-v0.2.0.zip
+unzip -l dist/wildix-meet-audio-bridge-v0.2.1.zip
 ```
 
 Il file risultante sarà:
 
 ```text
-dist/wildix-meet-audio-bridge-v0.2.0.zip
+dist/wildix-meet-audio-bridge-v0.2.1.zip
 ```
 
 È consigliato aggiungere `dist/` al `.gitignore`:
@@ -141,7 +143,7 @@ git archive \
   HEAD
 ```
 
-Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.3`, `v0.2.0`, ecc.).
+Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.2.0`, `v0.2.1`, ecc.).
 
 # Installazione su Google Chrome
 
@@ -150,7 +152,7 @@ Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre 
 Scaricare:
 
 ```text
-wildix-meet-audio-bridge-v0.2.0.zip
+wildix-meet-audio-bridge-v0.2.1.zip
 ```
 
 e decomprimerlo in una posizione permanente.
@@ -206,7 +208,7 @@ manifest.json
 Ad esempio:
 
 ```text
-wildix-meet-audio-bridge-v0.2.0/
+wildix-meet-audio-bridge-v0.2.1/
 ├── manifest.json
 ├── README.md
 └── src/
@@ -252,12 +254,14 @@ Se il microfono Meet era già disattivato prima della telefonata, deve rimanere 
 
 Se durante la chiamata Wildix l'utente riattiva manualmente il microfono di Meet, l'estensione non lo disattiva di nuovo.
 
+L'estensione clicca il pulsante del microfono una sola volta per ogni cambio di stato. Se Meet non applica il clic, l'estensione non ritenta e mostra una notifica di Chrome che chiede di sistemare il microfono a mano. Su macOS le notifiche di Google Chrome devono essere consentite in Impostazioni di Sistema → Notifiche.
+
 # Aggiornamento dell'estensione
 
 Quando viene pubblicata una nuova versione, ad esempio:
 
 ```text
-v0.2.0
+v0.2.1
 ```
 
 scaricare e decomprimere il nuovo ZIP.
@@ -311,6 +315,15 @@ service worker
 per visualizzare la Console di `background.js`.
 
 # Versioni
+
+## v0.2.1
+
+Correzione del microfono Meet che a fine chiamata non si riattivava o che continuava ad attivarsi e disattivarsi.
+
+Modifiche:
+- il pulsante del microfono viene cliccato una sola volta per ogni cambio di stato: un clic non applicato da Meet non viene più ripetuto, perché ogni clic in più inverte il microfono;
+- notifica di Chrome quando Meet non applica il clic, per sistemare il microfono a mano;
+- icona dell'estensione.
 
 ## v0.2.0
 
