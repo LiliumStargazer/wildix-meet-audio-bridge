@@ -38,10 +38,13 @@ L'architettura dell'estensione è compatibile anche con Google Chrome su Windows
 wildix-meet-audio-bridge/
 ├── manifest.json
 ├── README.md
-└── src/
-    ├── background.js
-    ├── meet.js
-    └── wildix.js
+├── src/
+│   ├── background.js   stato Wildix globale e audio delle schede Meet
+│   ├── meet.js         microfono di Google Meet
+│   ├── wildix.js       rilevamento chiamata dall'interfaccia Wildix
+│   └── wildix-rtc.js   rilevamento chiamata dalle connessioni WebRTC di Wildix
+└── test/
+    └── bridge.test.js  test automatici
 ```
 
 ## Sviluppo
@@ -57,23 +60,31 @@ git commit -m "Descrizione modifica"
 git push origin main
 ```
 
+## Test automatici
+
+I test eseguono il codice reale dell'estensione su API Chrome simulate e non richiedono dipendenze (Node.js 20 o successivo):
+
+```bash
+node --test
+```
+
 ## Creazione di una release
 
 Prima di creare il pacchetto assicurarsi che tutte le modifiche siano state salvate su `main`.
 
-Esempio per la versione `0.1.3`:
+Esempio per la versione `0.2.0`:
 
 ```bash
 git add .
-git commit -m "Release v0.1.3"
+git commit -m "Release v0.2.0"
 git push origin main
 ```
 
 Creare quindi il tag:
 
 ```bash
-git tag -a v0.1.3 -m "v0.1.3"
-git push origin v0.1.3
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
 ```
 
 ## Creazione dello ZIP
@@ -91,21 +102,21 @@ Creare il pacchetto partendo dal tag:
 ```bash
 git archive \
   --format=zip \
-  --prefix=wildix-meet-audio-bridge-v0.1.3/ \
-  --output=dist/wildix-meet-audio-bridge-v0.1.3.zip \
-  v0.1.3
+  --prefix=wildix-meet-audio-bridge-v0.2.0/ \
+  --output=dist/wildix-meet-audio-bridge-v0.2.0.zip \
+  v0.2.0
 ```
 
 Controllare il contenuto:
 
 ```bash
-unzip -l dist/wildix-meet-audio-bridge-v0.1.3.zip
+unzip -l dist/wildix-meet-audio-bridge-v0.2.0.zip
 ```
 
 Il file risultante sarà:
 
 ```text
-dist/wildix-meet-audio-bridge-v0.1.3.zip
+dist/wildix-meet-audio-bridge-v0.2.0.zip
 ```
 
 È consigliato aggiungere `dist/` al `.gitignore`:
@@ -130,7 +141,7 @@ git archive \
   HEAD
 ```
 
-Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.1`, `v0.1.3`, ecc.).
+Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.1.3`, `v0.2.0`, ecc.).
 
 # Installazione su Google Chrome
 
@@ -139,7 +150,7 @@ Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre 
 Scaricare:
 
 ```text
-wildix-meet-audio-bridge-v0.1.3.zip
+wildix-meet-audio-bridge-v0.2.0.zip
 ```
 
 e decomprimerlo in una posizione permanente.
@@ -195,7 +206,7 @@ manifest.json
 Ad esempio:
 
 ```text
-wildix-meet-audio-bridge-v0.1.3/
+wildix-meet-audio-bridge-v0.2.0/
 ├── manifest.json
 ├── README.md
 └── src/
@@ -209,6 +220,8 @@ Dopo l'installazione:
 
 1. ricaricare la pagina Google Meet;
 2. chiudere e riaprire Wildix Collaboration oppure ricaricarlo.
+
+Il ricaricamento di Wildix è necessario perché il rilevamento delle chiamate tramite WebRTC deve partire prima della pagina.
 
 ## Test
 
@@ -237,12 +250,14 @@ Audio Meet:     stato precedente
 
 Se il microfono Meet era già disattivato prima della telefonata, deve rimanere disattivato anche dopo la fine della chiamata.
 
+Se durante la chiamata Wildix l'utente riattiva manualmente il microfono di Meet, l'estensione non lo disattiva di nuovo.
+
 # Aggiornamento dell'estensione
 
 Quando viene pubblicata una nuova versione, ad esempio:
 
 ```text
-v0.1.3
+v0.2.0
 ```
 
 scaricare e decomprimere il nuovo ZIP.
@@ -263,7 +278,9 @@ Ricarica
 
 della scheda **Wildix Meet Audio Bridge**.
 
-Infine ricaricare Wildix e Google Meet.
+Infine ricaricare Wildix. Le schede Google Meet già aperte vengono aggiornate automaticamente.
+
+Non aggiornare l'estensione durante una chiamata Wildix: Chrome cancella lo stato salvato e Meet resterebbe silenziato al termine della chiamata.
 
 # Debug
 
@@ -294,6 +311,21 @@ service worker
 per visualizzare la Console di `background.js`.
 
 # Versioni
+
+## v0.2.0
+
+Nuova struttura dell'estensione per eliminare il comportamento instabile segnalato con la v0.1.3.
+
+Modifiche:
+- il background gestisce solo lo stato Wildix e l'audio delle schede Meet; il microfono è gestito interamente dalla pagina Meet;
+- il microfono viene portato allo stato richiesto una sola volta per ogni cambio di stato Wildix: un clic è considerato recepito solo quando Meet mostra il nuovo stato, eliminando i doppi clic;
+- se l'utente riattiva manualmente il microfono durante la chiamata, l'estensione non lo disattiva di nuovo;
+- una chiamata in arrivo non attende più la fine del ripristino della chiamata precedente;
+- il microfono Meet viene individuato tramite l'attributo `data-is-muted` e l'icona, indipendentemente dalla lingua di Meet (con le etichette italiane e inglesi come riserva);
+- la chiamata Wildix viene rilevata anche dalle connessioni WebRTC del telefono nel browser, oltre che dal pulsante "Riaggancia";
+- l'audio di una scheda uscita da Meet durante la chiamata viene comunque ripristinato;
+- dopo un aggiornamento gli script vengono reiniettati nelle schede già aperte;
+- test automatici con `node --test`.
 
 ## v0.1.3
 
