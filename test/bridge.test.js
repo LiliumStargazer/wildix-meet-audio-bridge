@@ -21,10 +21,12 @@ function createHarness({
   micMuted = false,
   micPresent = true,
   latencyMs = 100,
+  ignoresClicks = false,
   hasMutedAttribute = true,
   hasKnownLabels = true
 } = {}) {
   const store = {};
+  const notifications = [];
   const tab = { id: 1, url: "https://meet.google.com/abc", mutedInfo: { muted: false } };
   const mic = { muted: micMuted, present: micPresent, clicks: 0 };
   const observers = new Set();
@@ -56,6 +58,9 @@ function createHarness({
     querySelectorAll: () => [{ textContent: mic.muted ? " mic_off " : "mic" }],
     click() {
       mic.clicks += 1;
+      if (ignoresClicks) {
+        return;
+      }
       setTimeout(() => {
         mic.muted = !mic.muted;
         notifyObservers();
@@ -73,6 +78,7 @@ function createHarness({
         onMessage: { addListener: f => { backgroundListener = f; } },
         onInstalled: { addListener() {} }
       },
+      notifications: { create: options => notifications.push(options.message) },
       storage: {
         session: {
           get: async defaults => structuredClone({
@@ -137,6 +143,7 @@ function createHarness({
   return {
     mic,
     tab,
+    notifications,
     loadMeet,
     setWildixBusy: busy =>
       backgroundListener({ type: "WILDIX_STATE_CHANGED", busy }, { tab: { id: 99 } }),
@@ -157,6 +164,7 @@ describe("Wildix Meet Audio Bridge", { concurrency: true }, () => {
     w.setWildixBusy(false);
     await sleep(SETTLE_MS);
     assert.deepStrictEqual([w.mic.muted, w.tab.mutedInfo.muted], [false, false]);
+    assert.deepStrictEqual(w.notifications, []);
   });
 
   test("leaves an already muted mic muted after the call", async () => {
@@ -239,6 +247,23 @@ describe("Wildix Meet Audio Bridge", { concurrency: true }, () => {
     w.userToggleMic();
     await sleep(SETTLE_MS);
     assert.deepStrictEqual([w.mic.muted, w.mic.clicks], [false, 1]);
+  });
+
+  test("a Meet slower than the settle time is never clicked twice", async () => {
+    const w = createHarness({ latencyMs: 3000 });
+    w.loadMeet();
+    w.setWildixBusy(true);
+    await sleep(2 * SETTLE_MS);
+    assert.deepStrictEqual([w.mic.muted, w.mic.clicks], [true, 1]);
+  });
+
+  test("a click Meet ignores is not repeated", async () => {
+    const w = createHarness({ ignoresClicks: true });
+    w.loadMeet();
+    w.setWildixBusy(true);
+    await sleep(2 * SETTLE_MS);
+    assert.strictEqual(w.mic.clicks, 1);
+    assert.match(w.notifications.join(), /disattivalo a mano/);
   });
 
   test("works with Meet in another language", async () => {

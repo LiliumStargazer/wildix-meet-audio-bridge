@@ -107,6 +107,17 @@ chrome.runtime.onMessage.addListener(
       );
     }
 
+    if (message.type === "MEET_MIC_NOT_APPLIED") {
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title: "Microfono di Google Meet",
+        message: message.targetMuted
+          ? "Non sono riuscito a disattivarlo durante la chiamata Wildix: disattivalo a mano."
+          : "Non sono riuscito a riattivarlo dopo la chiamata Wildix: riattivalo a mano se ti serve."
+      });
+    }
+
     if (message.type === "MEET_READY") {
       enqueueOperation(
         `Meet tab ${tabId} ready`,

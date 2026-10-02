@@ -2,8 +2,8 @@
   const VERSION = chrome.runtime.getManifest().version;
   const PREFIX = `[Wildix Meet Audio Bridge v${VERSION}]`;
 
-  // The mic button is a toggle: clicking again before Meet shows the previous
-  // click flips it back, so a click only counts as lost after this long.
+  // The mic button is a toggle, so a click is never repeated: one Meet has not
+  // shown after this long is given up and left to the user.
   const CLICK_SETTLE_MS = 2000;
   // Stop trying to restore after this long, so a mic found much later is
   // never unmuted unexpectedly.
@@ -211,11 +211,16 @@
     setTimeout(() => {
       if (click === clickCount && clickedFrom !== null) {
         console.warn(
-          `${PREFIX} Clic non recepito da Meet, ritento`
+          `${PREFIX} Meet non ha applicato il clic: non ritento, microfono da controllare a mano`
         );
 
+        chrome.runtime.sendMessage({
+          type: "MEET_MIC_NOT_APPLIED",
+          targetMuted: targetMicMuted
+        }).catch(() => {});
+
         clickedFrom = null;
-        reconcile();
+        stopDriving();
       }
     }, CLICK_SETTLE_MS);
   }
