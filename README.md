@@ -2,6 +2,8 @@
 
 Estensione Chrome che silenzia automaticamente Google Meet quando l'Interno è Occupato, secondo gli eventi del Centralino Wildix.
 
+Versione corrente: **v0.3.0**. [Scarica lo ZIP](https://github.com/LiliumStargazer/wildix-meet-audio-bridge/releases/download/v0.3.0/wildix-meet-audio-bridge-v0.3.0.zip).
+
 ## Funzionamento
 
 Quando il Centralino segnala una Chiamata Wildix in entrata (già dallo squillo) o in uscita:
@@ -12,25 +14,20 @@ Quando il Centralino segnala una Chiamata Wildix in entrata (già dallo squillo)
 Quando termina l'ultima Chiamata Wildix, anche se altre erano in attesa:
 
 - riapre il segnale del microfono; il pulsante di Meet resta come l'utente l'ha lasciato, anche se lo ha cambiato durante la chiamata;
-- ripristina lo stato precedente dell'audio della scheda Meet.
+- ripristina lo **Stato precedente** dell'audio della scheda Meet: se era già silenziata, resta silenziata.
 
 L'estensione non modifica il microfono o l'audio del sistema operativo e funziona interamente all'interno di Chrome.
 
 Attualmente è configurata per:
 
-- Wildix: `https://automaticmachines.wildixin.com/`
+- Centralino aziendale predefinito: `https://automaticmachines.wildixin.com/` (modificabile dalla finestrella)
 - Google Meet: `https://meet.google.com/`
 
 ## Compatibilità
 
-Testata con:
+Richiede **Google Chrome 116 o successivo**, Google Meet e un Centralino Wildix raggiungibile via HTTPS che consenta l'accesso WTAPI v1 con Interno e password.
 
-- Google Chrome
-- macOS
-- Wildix Collaboration
-- Google Meet
-
-L'architettura dell'estensione è compatibile anche con Google Chrome su Windows.
+Testata con Google Chrome su macOS. L'architettura è compatibile anche con Google Chrome su Windows. Non serve installare o tenere aperta Wildix Collaboration.
 
 ## Struttura
 
@@ -39,21 +36,23 @@ wildix-meet-audio-bridge/
 ├── manifest.json
 ├── README.md
 ├── icons/
-│   └── icon128.png     icona dell'estensione e delle notifiche
+│   ├── icon128.png     icona dell'estensione e delle notifiche
+│   └── icon{16,32}-{red,green}.png  varianti per la barra di Chrome
 ├── src/
 │   ├── background.js   stato Occupato/Libero e audio delle schede Meet
-│   ├── centralino.js   avvio del collegamento, badge e notifiche
-│   ├── centralino-settings.js  validazione delle opzioni
+│   ├── centralino.js   collegamento, icona rossa/verde, badge e notifiche
+│   ├── centralino-settings.js  validazione delle credenziali e dell'indirizzo
 │   ├── offscreen.html  documento che ospita WTAPI
 │   ├── offscreen.js    eventi del Centralino e chiamate attive
 │   ├── wtapi.js        libreria WTAPI v1 inclusa
-│   ├── options.html    pagina di opzioni
-│   ├── options.js      salvataggio e stato del collegamento
+│   ├── popup.html      finestrella di accesso e configurazione
+│   ├── popup.js        salvataggio, riepilogo e stato del collegamento
 │   ├── meet-audio.js   controllo del segnale microfono prima degli script di Meet
 │   └── meet.js         inoltro dello stato Occupato/Libero alla pagina Meet
 └── test/
     ├── bridge.test.js     test audio e stato Occupato/Libero
-    └── centralino.test.js test collegamento e opzioni
+    ├── centralino.test.js test collegamento, finestrella, icone e notifiche
+    └── fake-wtapi.js      Centralino simulato condiviso dai test
 ```
 
 ## Sviluppo
@@ -71,19 +70,48 @@ git push origin main
 
 ## Collegamento al Centralino
 
-Con Chrome 116 o successivo, aprire **Dettagli → Opzioni estensione** da `chrome://extensions` e salvare Interno, password e indirizzo HTTPS del Centralino. L'indirizzo aziendale è precompilato; scegliendone un altro Chrome chiede il permesso per quel solo indirizzo. Le credenziali sono salvate in `chrome.storage.local`, solo nel profilo Chrome e senza cifratura, e non sono accessibili ai content script.
+### Primo accesso e credenziali ricordate
 
-Le opzioni mostrano **Collegato** o **Scollegato**. Il badge rosso **!** indica che il collegamento manca; le notifiche segnalano solo i cambi di collegamento, non i tentativi falliti ripetuti. Il collegamento parte anche all'avvio di Chrome e all'installazione, senza una scheda Wildix Collaboration aperta, e si riallinea dopo il riavvio del service worker.
+1. Cliccare sull'icona di **Wildix Meet Audio Bridge** nella barra di Chrome; se non è visibile, cercarla nel menu Estensioni (puzzle) e fissarla alla barra. Si apre la **finestrella**, non una pagina Opzioni.
+2. Inserire **Interno** e password, le stesse credenziali di Wildix Collaboration. La password è mascherata.
+3. L'indirizzo aziendale è già compilato sotto **Impostazioni avanzate**, inizialmente chiuse. Per cambiarlo, usare il solo indirizzo HTTPS del Centralino, senza percorsi o credenziali nell'URL.
+4. Premere **Salva e collega** e concedere il permesso per l'indirizzo scelto, se Chrome lo richiede. Dati non validi o permesso negato mostrano un errore senza sovrascrivere la configurazione precedente.
+5. Attendere **Collegato**: credenziali salvate o un tentativo avviato non indicano ancora che il collegamento sia riuscito.
 
-Se il collegamento cade, lo stato **Occupato/Libero** resta invariato: Meet non viene riaperto durante una Chiamata Wildix. L'estensione ritenta il collegamento automaticamente dopo 5 secondi e, alla riconnessione, attende l'elenco delle chiamate dal Centralino prima di riallineare Meet, anche quando l'elenco è vuoto.
+Le credenziali restano in `chrome.storage.local`, solo nel profilo Chrome, senza cifratura e non accessibili ai content script; sono inviate solo al Centralino scelto.
+
+Con credenziali salvate, la finestrella mostra Interno, stato corrente e **Modifica credenziali**, senza esporre la password nel riepilogo. La configurazione della vecchia pagina Opzioni viene riutilizzata, compreso un eventuale indirizzo personalizzato. **Modifica credenziali** apre il modulo senza interrompere il collegamento: solo un salvataggio valido applica la nuova configurazione. Non c'è un pulsante Esci.
+
+Si può chiudere e riaprire la finestrella: il collegamento continua in background e non viene riavviato solo per consultare lo stato. Riparte automaticamente anche all'avvio di Chrome, senza reinserire le credenziali, e si riallinea dopo il riavvio del service worker. Wildix Collaboration non deve essere aperta.
+
+### Icona, stato e riconnessione
+
+- **Icona verde / Collegato**: l'estensione è effettivamente collegata al Centralino.
+- **Icona rossa / Scollegato**, con badge **!**: il collegamento manca, anche se le credenziali sono presenti o il login è in corso.
+- Con credenziali salvate e collegamento assente, la finestrella mostra **Scollegato — riconnessione automatica**, senza chiedere nuovamente la password per una perdita della rete.
+
+**Collegato/Scollegato** è distinto da **Occupato/Libero**: durante una Chiamata Wildix l'icona resta verde se il collegamento è attivo. Lo stato è disponibile anche come testo e si aggiorna mentre la finestrella resta aperta. Il badge e le notifiche seguono i cambi del collegamento, senza una notifica per ogni tentativo fallito o riapertura della finestrella.
+
+Se il collegamento cade, lo stato **Occupato/Libero** resta invariato: Meet non viene riaperto durante una Chiamata Wildix già rilevata. L'estensione ritenta automaticamente dopo 5 secondi e, alla riconnessione, attende l'elenco delle chiamate dal Centralino prima di riallineare Meet, anche quando l'elenco è vuoto. Finché è Scollegato, non può rilevare nuove Chiamate Wildix.
 
 Gli eventi del Centralino sono l'unica fonte dello stato **Occupato/Libero** che comanda Meet: basta una chiamata attiva, in squillo, risposta o attesa, su qualunque dispositivo dell'Interno. Le chiamate sovrapposte mantengono Meet silenziato fino all'ultima chiusura. Nessuno script dell'estensione gira su Wildix Collaboration: il vecchio rilevamento da pulsanti e WebRTC è stato eliminato.
 
-Per i log di `call_added`, `call_updated` e `call_terminated`, aprire `chrome://extensions`, abilitare Modalità sviluppatore e ispezionare il documento `src/offscreen.html`; i cambi Occupato/Libero e di collegamento compaiono nella console del service worker.
+### Requisiti del Centralino e futura migrazione a WTAPI v2
+
+La versione attuale richiede un Interno e una password validi per **WTAPI v1** e il permesso Chrome per l'indirizzo HTTPS del Centralino. Login ed eventi dall'estensione sono stati verificati sul Centralino aziendale nella [#4](https://github.com/LiliumStargazer/wildix-meet-audio-bridge/issues/4), senza bisogno di riscrivere l'intestazione `Origin`. Su un altro Centralino, l'accesso dall'origine `chrome-extension://<id>` va verificato con l'amministratore.
 
 La libreria inclusa in `src/wtapi.js` è **WTAPI v1.0.2**, copia invariata di <https://automaticmachines.wildixin.com/public/wtapi.js>, scaricata il 13/10/2026 (Last-Modified: 22/06/2026). SHA-256: `384cefab95377c936f637450604862f1f6d23ecea07a68396b51a601e38d4da9`. Chrome non carica codice remoto; le risposte HTTP della libreria sono forzate a JSON per evitare valutazione di JavaScript remoto.
 
-WTAPI v1 è deprecata: vedi [ADR 0001](docs/adr/0001-occupato-dagli-eventi-del-centralino.md). Login ed eventi reali dall'estensione, inclusa l'eventuale restrizione sull'origine `chrome-extension://`, vanno verificati con credenziali vere nella #4. La release e l'aggiornamento complessivo di questo README sono previsti nella #7.
+**WTAPI v1 è deprecata** e l'accesso con password è annunciato come deprecato dal Q3 2026: un aggiornamento del Centralino può impedirne il funzionamento. La v0.3.0 non implementa ancora WTAPI v2/OAuth 2.0.
+
+Per la futura migrazione, un amministratore dovrà:
+
+- creare un'applicazione **Wildix Meet Audio Bridge** in **WMS → Settings → PBX → Integrations → Applications → OAuth 2.0**;
+- configurare il Redirect URI `https://<id-estensione>.chromiumapp.org/` e fornire l'`applicationId` alla futura implementazione dell'estensione;
+- autorizzare l'origine dell'estensione in **WMS → PBX → Security → CORS**;
+- verificare la licenza minima **UC-Business o x-bees Standard**.
+
+Il login avverrà sulla pagina Wildix, senza salvare la password nell'estensione; l'autorizzazione OAuth richiederà rinnovi. Decisioni, limiti e fonti ufficiali Wildix sono raccolti nell'[ADR 0001](docs/adr/0001-occupato-dagli-eventi-del-centralino.md). Il controllo del microfono segue l'[ADR 0002](docs/adr/0002-silenziare-meet-senza-toccarne-i-controlli.md).
 
 ## Test automatici
 
@@ -93,72 +121,45 @@ I test eseguono il codice reale dell'estensione su API Chrome simulate e non ric
 node --test
 ```
 
-## Creazione di una release
+## Creazione di una release e dello ZIP
 
-Prima di creare il pacchetto assicurarsi che tutte le modifiche siano state salvate su `main`.
-
-Esempio per la versione `0.2.1`:
+Prima del rilascio, aggiornare la versione in `manifest.json` e la sezione Versioni di questo README, eseguire i test e committare tutte le modifiche che devono entrare nel pacchetto su `main`. Esempio per la v0.3.0:
 
 ```bash
-git add .
-git commit -m "Release v0.2.1"
+node --test
+git add README.md manifest.json
+git commit -m "Release v0.3.0"
 git push origin main
+git tag -a v0.3.0 -m "v0.3.0"
+git push origin v0.3.0
 ```
 
-Creare quindi il tag:
-
-```bash
-git tag -a v0.2.1 -m "v0.2.1"
-git push origin v0.2.1
-```
-
-## Creazione dello ZIP
-
-Lo ZIP viene creato direttamente nel Codespace.
-
-Creare la directory `dist`:
+Creare lo ZIP dal tag, non dai file locali non committati:
 
 ```bash
 mkdir -p dist
-```
-
-Creare il pacchetto partendo dal tag:
-
-```bash
 git archive \
   --format=zip \
-  --prefix=wildix-meet-audio-bridge-v0.2.1/ \
-  --output=dist/wildix-meet-audio-bridge-v0.2.1.zip \
-  v0.2.1
+  --prefix=wildix-meet-audio-bridge-v0.3.0/ \
+  --output=dist/wildix-meet-audio-bridge-v0.3.0.zip \
+  v0.3.0
+unzip -t dist/wildix-meet-audio-bridge-v0.3.0.zip
 ```
 
-Controllare il contenuto:
+`dist/` è già esclusa da Git. Per pubblicare il pacchetto nella release GitHub, con la CLI `gh` autenticata:
 
 ```bash
-unzip -l dist/wildix-meet-audio-bridge-v0.2.1.zip
+gh release create v0.3.0 \
+  dist/wildix-meet-audio-bridge-v0.3.0.zip \
+  --verify-tag --title "v0.3.0" --generate-notes
 ```
 
-Il file risultante sarà:
+### ZIP di test senza tag
 
-```text
-dist/wildix-meet-audio-bridge-v0.2.1.zip
-```
-
-È consigliato aggiungere `dist/` al `.gitignore`:
-
-```text
-dist/
-```
-
-In questo modo i pacchetti generati non vengono salvati nel repository Git.
-
-## Creazione ZIP di test senza tag
-
-Durante lo sviluppo è possibile creare un pacchetto direttamente dallo stato corrente di `main`:
+Durante lo sviluppo è possibile creare un pacchetto dal commit corrente:
 
 ```bash
 mkdir -p dist
-
 git archive \
   --format=zip \
   --prefix=wildix-meet-audio-bridge-test/ \
@@ -166,16 +167,16 @@ git archive \
   HEAD
 ```
 
-Per le versioni distribuite ai colleghi è invece preferibile utilizzare sempre un tag (`v0.2.0`, `v0.2.1`, ecc.).
+Anche questo comando esclude le modifiche non committate. Per i pacchetti distribuiti ai colleghi usare una release con tag.
 
 # Installazione su Google Chrome
 
 ## 1. Scaricare il pacchetto
 
-Scaricare:
+Scaricare lo ZIP dalla [release v0.3.0](https://github.com/LiliumStargazer/wildix-meet-audio-bridge/releases/tag/v0.3.0):
 
 ```text
-wildix-meet-audio-bridge-v0.2.1.zip
+wildix-meet-audio-bridge-v0.3.0.zip
 ```
 
 e decomprimerlo in una posizione permanente.
@@ -231,7 +232,7 @@ manifest.json
 Ad esempio:
 
 ```text
-wildix-meet-audio-bridge-v0.2.1/
+wildix-meet-audio-bridge-v0.3.0/
 ├── manifest.json
 ├── README.md
 └── src/
@@ -243,8 +244,9 @@ Non selezionare direttamente la cartella `src`.
 
 Dopo l'installazione:
 
-1. aprire le opzioni dell'estensione, salvare Interno e password e verificare **Collegato**;
-2. ricaricare le schede Google Meet già aperte.
+1. cliccare sull'icona dell'estensione, inserire Interno e password nella finestrella e premere **Salva e collega**;
+2. verificare **Collegato** e l'icona verde;
+3. ricaricare le schede Google Meet già aperte, come richiesto dalla notifica.
 
 Non serve ricaricare o tenere aperta Wildix Collaboration: le Chiamate Wildix arrivano dal Centralino.
 
@@ -283,15 +285,9 @@ Il controllo viene inserito prima che Meet chieda il microfono. Dopo l'installaz
 
 # Aggiornamento dell'estensione
 
-Quando viene pubblicata una nuova versione, ad esempio:
+Scaricare e decomprimere lo ZIP della nuova release, per esempio **v0.3.0**.
 
-```text
-v0.2.1
-```
-
-scaricare e decomprimere il nuovo ZIP.
-
-È possibile sostituire i file nella cartella già utilizzata dall'estensione.
+Sostituire i file nella cartella già utilizzata dall'estensione, senza rimuovere l'estensione da Chrome: in questo modo le credenziali salvate restano nel profilo. La vecchia pagina Opzioni è sostituita dalla finestrella al clic sull'icona.
 
 Successivamente aprire:
 
@@ -313,33 +309,32 @@ Non aggiornare l'estensione durante una chiamata Wildix: Chrome cancella lo stat
 
 # Debug
 
-Per controllare il funzionamento dell'estensione:
+Aprire `chrome://extensions` e abilitare **Modalità sviluppatore**.
 
-## Google Meet
+- **Centralino**: nella scheda dell'estensione ispezionare il documento `src/offscreen.html` per vedere `call_added`, `call_updated` e `call_terminated`. Non servono gli strumenti sviluppatore di Wildix Collaboration.
+- **Background**: cliccare su **service worker** per la console di `src/background.js`, con i cambi Occupato/Libero, Collegato/Scollegato ed eventuali errori su audio delle schede, icone e notifiche.
+- **Finestrella**: cliccare sull'icona, poi con il tasto destro nella finestrella scegliere **Ispeziona** per la console di `src/popup.js`.
+- **Google Meet**: aprire gli strumenti sviluppatore della pagina e controllare la Console per gli errori del controllo del microfono.
 
-Aprire gli strumenti sviluppatore della pagina Meet e controllare la Console.
-
-## Centralino
-
-Da `chrome://extensions` ispezionare `src/offscreen.html` per gli eventi di Chiamata Wildix. Non servono gli strumenti sviluppatore di Wildix Collaboration.
-
-## Background dell'estensione
-
-Aprire:
-
-```text
-chrome://extensions
-```
-
-e, nella scheda **Wildix Meet Audio Bridge**, cliccare sul link relativo al:
-
-```text
-service worker
-```
-
-per visualizzare la Console di `background.js`.
+Se una notifica non appare, controllare anche che il sistema operativo consenta le notifiche di Chrome. Non pubblicare password o altri segreti in log e schermate.
 
 # Versioni
+
+## v0.3.0
+
+Occupato dagli eventi del Centralino e Meet silenziato senza toccarne i controlli.
+
+Modifiche:
+- collegamento WTAPI v1 direttamente dall'estensione, indipendente da Wildix Collaboration;
+- segnale del microfono verso Meet silenziato già dallo squillo e audio delle schede ripristinato allo Stato precedente a fine ultima Chiamata Wildix, senza clic sul pulsante microfono;
+- finestrella al clic sull'icona, credenziali ricordate, riepilogo e Modifica credenziali, Centralino sotto Impostazioni avanzate;
+- icona rossa/verde e testo per Scollegato/Collegato, badge di avviso e notifiche solo ai cambi del collegamento;
+- riconnessione automatica, mantenimento di Occupato/Libero offline e riallineamento dopo riconnessione o riavvio del service worker;
+- notifica per ricaricare le schede Meet dopo installazione o aggiornamento;
+- gestione delle tracce microfono clonate, correzioni dei salvataggi concorrenti delle credenziali e dei percorsi delle immagini di icone e notifiche;
+- test automatici e istruzioni di configurazione, debug e rilascio aggiornati.
+
+**Dopo l'aggiornamento ricaricare l'estensione e tutte le schede Meet già aperte. Non aggiornare durante una Chiamata Wildix.**
 
 ## v0.2.1
 
