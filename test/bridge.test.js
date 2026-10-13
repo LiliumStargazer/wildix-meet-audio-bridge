@@ -147,6 +147,7 @@ function createHarness({ tabMuted = false } = {}) {
 
   const page = vm.createContext({
     window, navigator: { mediaDevices }, MediaStream: FakeMediaStream,
+    MediaStreamTrack: FakeTrack,
     AudioContext: FakeAudioContext, CustomEvent, Event, console: silentConsole,
     // Any attempt to inspect or click Meet's controls fails the test.
     document: new Proxy({}, { get() { throw new Error("Meet controls accessed"); } })
@@ -169,6 +170,7 @@ function createHarness({ tabMuted = false } = {}) {
 
   return {
     tab, notifications, injections, requests, microphones, audioContexts,
+    MediaStream: FakeMediaStream,
     loadMeet() {
       vm.runInContext(readSource("meet-audio.js"), page);
       vm.runInContext(readSource("meet.js"), isolated);
@@ -244,6 +246,59 @@ describe("Silenziare Meet", () => {
     lastClone.stop();
     assert.equal(bridge.microphones[0].getAudioTracks()[0].readyState, "ended");
     assert.equal(bridge.audioContexts[0].state, "closed");
+  });
+
+  test("clones of reassembled streams stay controlled until the last clone stops", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    await flush();
+    const stream = await bridge.getUserMedia({ audio: true });
+    const mic = stream.getAudioTracks()[0];
+    const firstClone = new bridge.MediaStream([mic]).clone().getAudioTracks()[0];
+    const lastClone = new bridge.MediaStream([firstClone]).clone().getAudioTracks()[0];
+    mic.stop();
+    firstClone.stop();
+    assert.equal(lastClone.sample(), 1);
+    assert.equal(bridge.microphones[0].getAudioTracks()[0].readyState, "live");
+
+    await bridge.setWildixBusy(true);
+    assert.equal(lastClone.sample(), 0);
+    await bridge.setWildixBusy(false);
+    assert.equal(lastClone.sample(), 1);
+    lastClone.stop();
+    assert.equal(bridge.microphones[0].getAudioTracks()[0].readyState, "ended");
+    assert.equal(bridge.audioContexts[0].state, "closed");
+  });
+
+  test("a mixed stream's clones release each microphone independently and preserve video", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    await flush();
+    const firstStream = await bridge.getUserMedia({ audio: true, video: true });
+    const secondStream = await bridge.getUserMedia({ audio: true });
+    const video = firstStream.getVideoTracks()[0];
+    video.enabled = false;
+    const mixedStream = new bridge.MediaStream([
+      ...firstStream.getTracks(), ...secondStream.getTracks()
+    ]).clone();
+    const [firstClone, secondClone] = mixedStream.getAudioTracks();
+    const clonedVideo = mixedStream.getVideoTracks()[0];
+    assert.notEqual(clonedVideo, video);
+    assert.equal(clonedVideo.enabled, false);
+    firstStream.getTracks().forEach(track => track.stop());
+    secondStream.getTracks().forEach(track => track.stop());
+
+    assert.deepEqual([firstClone.sample(), secondClone.sample()], [1, 1]);
+    await bridge.setWildixBusy(true);
+    assert.deepEqual([firstClone.sample(), secondClone.sample()], [0, 0]);
+    await bridge.setWildixBusy(false);
+    firstClone.stop();
+    assert.equal(secondClone.sample(), 1);
+    assert.deepEqual(bridge.audioContexts.map(context => context.state), ["closed", "running"]);
+    assert.equal(clonedVideo.readyState, "live");
+    secondClone.stop();
+    assert.deepEqual(bridge.audioContexts.map(context => context.state), ["closed", "closed"]);
+    assert.ok(bridge.microphones.every(stream => stream.getAudioTracks()[0].readyState === "ended"));
   });
 
   test("a microphone switched off in Meet while Occupato stays off after Libero", async () => {
@@ -347,6 +402,17 @@ describe("Silenziare Meet", () => {
     bridge.loadMeet();
     const stream = await bridge.getUserMedia({ audio: false, video: true });
     assert.equal(stream, bridge.microphones[0]);
+    assert.equal(bridge.audioContexts.length, 0);
+  });
+
+  test("video-only stream clones remain live when the original track stops", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    const stream = await bridge.getUserMedia({ audio: false, video: true });
+    const clone = new bridge.MediaStream(stream.getTracks()).clone();
+    stream.getVideoTracks()[0].stop();
+    assert.notEqual(clone.getVideoTracks()[0], stream.getVideoTracks()[0]);
+    assert.equal(clone.getVideoTracks()[0].readyState, "live");
     assert.equal(bridge.audioContexts.length, 0);
   });
 

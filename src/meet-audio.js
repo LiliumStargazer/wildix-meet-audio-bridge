@@ -1,6 +1,10 @@
 // Runs in MAIN at document_start, before Meet can request a microphone.
 (() => {
   const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  const cloneStream = MediaStream.prototype.clone;
+  const cloneTrack = MediaStreamTrack.prototype.clone;
+  const getStreamTracks = MediaStream.prototype.getTracks;
+  const microphoneCloners = new WeakMap();
   const gains = new Set();
   // Keep the signal closed until the background supplies the initial state.
   let isOccupato = true;
@@ -14,6 +18,18 @@
       gain.gain.value = isOccupato ? 0 : 1;
     }
   });
+
+  // Native stream cloning bypasses track.clone(), including in reassembled streams.
+  MediaStream.prototype.clone = function() {
+    const tracks = getStreamTracks.call(this);
+    if (!tracks.some(track => microphoneCloners.has(track))) {
+      return cloneStream.call(this);
+    }
+    return new MediaStream(tracks.map(track => {
+      const cloneMicrophone = microphoneCloners.get(track);
+      return cloneMicrophone ? cloneMicrophone() : cloneTrack.call(track);
+    }));
+  };
 
   navigator.mediaDevices.getUserMedia = async (...args) => {
     const stream = await getUserMedia(...args);
@@ -53,14 +69,8 @@
         }
       };
       microphone.clone = () => trackMicrophoneLifetime(clone());
+      microphoneCloners.set(microphone, microphone.clone);
       return microphone;
-    }
-
-    function trackStreamLifetime(stream) {
-      stream.getAudioTracks().forEach(trackMicrophoneLifetime);
-      const clone = stream.clone.bind(stream);
-      stream.clone = () => trackStreamLifetime(clone());
-      return stream;
     }
 
     try {
@@ -72,9 +82,10 @@
       gains.add(gain);
       source.connect(gain).connect(destination);
 
-      const controlledStream = trackStreamLifetime(new MediaStream([
+      const controlledStream = new MediaStream([
         ...destination.stream.getAudioTracks(), ...stream.getVideoTracks()
-      ]));
+      ]);
+      controlledStream.getAudioTracks().forEach(trackMicrophoneLifetime);
       microphoneTracks.forEach(track => {
         track.addEventListener("ended", () => {
           for (const microphone of activeMicrophones) {
