@@ -129,7 +129,7 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
 
   await chrome.notifications.create({
     type: "basic",
-    iconUrl: "icons/icon128.png",
+    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
     title: "Ricarica Google Meet",
     message: "Ricarica le schede Google Meet già aperte per silenziare il microfono durante le chiamate Wildix."
   }).catch(error => {

@@ -17,7 +17,7 @@ async function setCentralinoConnected(connected) {
     if (connected !== (centralinoConnected ?? false)) {
       await chrome.notifications.create({
         type: "basic",
-        iconUrl: "icons/icon128.png",
+        iconUrl: chrome.runtime.getURL("icons/icon128.png"),
         title: "Collegamento al Centralino",
         message: connected
           ? "Collegamento al Centralino riuscito."

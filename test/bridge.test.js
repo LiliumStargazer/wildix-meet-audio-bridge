@@ -164,6 +164,10 @@ function createHarness({ tabMuted = false } = {}) {
       },
       notifications: { create: async options => {
         if (notificationsFail) throw new Error("Notifications unavailable");
+        const iconUrl = new URL(options.iconUrl, "chrome-extension://bridge/src/background.js");
+        if (!fs.existsSync(path.join(__dirname, "..", iconUrl.pathname.slice(1)))) {
+          throw new Error("Unable to download all specified images.");
+        }
         notifications.push(options);
       } },
       scripting: { executeScript: async options => { injections.push(options); } },

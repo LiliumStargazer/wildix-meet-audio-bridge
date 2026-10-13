@@ -138,6 +138,10 @@ function createCentralinoHarness(settings = null) {
     },
     notifications: { create: async options => {
       if (notificationsFail) throw new Error("Notifiche non disponibili");
+      const iconUrl = new URL(options.iconUrl, getURL("src/background.js"));
+      if (!fs.existsSync(path.join(__dirname, "..", iconUrl.pathname.slice(1)))) {
+        throw new Error("Unable to download all specified images.");
+      }
       notifications.push(options);
     } },
     offscreen: {
