@@ -24,6 +24,10 @@ function createCentralinoHarness(settings = null) {
   const installedListeners = [];
   const badge = {};
   const contexts = [];
+  const offscreenListeners = [];
+  const reconnectTimers = new Map();
+  let nextTimerId = 0;
+  let offscreenDocumentId = 0;
   const storageListeners = [];
   const requestedOrigins = [];
   const meetTab = { id: 1, mutedInfo: { muted: false } };
@@ -49,6 +53,13 @@ function createCentralinoHarness(settings = null) {
     getURL,
     getManifest: () => ({ version: "test", content_scripts: [] }),
     getContexts: async () => structuredClone(contexts),
+    sendMessage: async message => {
+      let response;
+      offscreenListeners.forEach(listener => listener(message, { id: "bridge" }, value => {
+        response = value;
+      }));
+      return response;
+    },
     onMessage: { addListener: listener => listeners.push(listener) },
     onStartup: { addListener: listener => startupListeners.push(listener) },
     onInstalled: { addListener: listener => installedListeners.push(listener) }
@@ -74,6 +85,13 @@ function createCentralinoHarness(settings = null) {
       this.credentials = { interno, password, url };
       this.listeners = {};
       this.calls = [];
+      this.messageHandlers = [{ priority: 10, callback: packet => {
+        const event = packet.getChild("event", "urn:wildix:ami");
+        if (!event) return false;
+        this.calls = event.calls;
+        this.calls.forEach(call => this.listeners.call_added(call));
+        return true;
+      } }];
       this.telephony = {
         on: (event, listener) => { this.listeners[event] = listener; },
         getActiveCalls: () => this.calls.slice()
@@ -82,6 +100,15 @@ function createCentralinoHarness(settings = null) {
     }
     on(event, listener) { this.listeners[event] = listener; }
     connect() { this.hasStarted = true; }
+    registerHandler(event, callback, scope, priority) {
+      this.messageHandlers.push({ priority, callback: packet => callback.call(scope, packet) });
+      this.messageHandlers.sort((first, second) => first.priority - second.priority);
+    }
+    receiveCallsState(calls = this.calls) {
+      const packet = { getChild: (name, namespace) => namespace === "urn:wildix:ami"
+        ? { calls, getAttribute: () => "state" } : null };
+      this.messageHandlers.some(handler => handler.callback(packet));
+    }
     emit(event, call) {
       if (event === "disconnected") {
         this.calls.forEach(call => this.listeners.call_terminated(call));
@@ -116,14 +143,14 @@ function createCentralinoHarness(settings = null) {
     offscreen: {
       createDocument: async () => {
         contexts.push({ documentUrl: getURL("src/offscreen.html") });
-        vm.runInNewContext(readSource("offscreen.js"), {
-          console, WTAPI: FakeWTAPI, queueMicrotask,
-          chrome: { runtime: {
-            sendMessage: message => sendMessage(message, getURL("src/offscreen.html"))
-          } }
-        });
+        loadOffscreenDocument();
       },
-      closeDocument: async () => { contexts.length = 0; }
+      closeDocument: async () => {
+        offscreenDocumentId += 1;
+        contexts.length = 0;
+        offscreenListeners.length = 0;
+        reconnectTimers.clear();
+      }
     },
     tabs: {
       query: async () => [structuredClone(meetTab)],
@@ -132,14 +159,59 @@ function createCentralinoHarness(settings = null) {
       onRemoved: { addListener() {} }
     }
   };
-  const worker = vm.createContext({ chrome, console, URL, crypto });
-  worker.importScripts = (...files) => files.forEach(file =>
-    vm.runInContext(readSource(file), worker));
-  vm.runInContext(readSource("background.js"), worker);
+  function loadOffscreenDocument() {
+    const documentId = ++offscreenDocumentId;
+    offscreenListeners.length = 0;
+    reconnectTimers.clear();
+    vm.runInNewContext(readSource("offscreen.js"), {
+      console, WTAPI: FakeWTAPI, queueMicrotask,
+      setTimeout: callback => {
+        const timerId = ++nextTimerId;
+        reconnectTimers.set(timerId, callback);
+        return timerId;
+      },
+      clearTimeout: timerId => reconnectTimers.delete(timerId),
+      location: { reload: loadOffscreenDocument },
+      chrome: { runtime: {
+        id: "bridge",
+        onMessage: { addListener: listener => offscreenListeners.push(listener) },
+        // Closed Chrome documents cannot resume pending requests.
+        sendMessage: message => sendMessage(message, getURL("src/offscreen.html")).then(response =>
+          documentId === offscreenDocumentId ? response : new Promise(() => {}))
+      } }
+    });
+  }
+  function startWorker() {
+    listeners.length = 0;
+    startupListeners.length = 0;
+    installedListeners.length = 0;
+    const worker = vm.createContext({ chrome, console, URL, crypto });
+    worker.importScripts = (...files) => files.forEach(file =>
+      vm.runInContext(readSource(file), worker));
+    vm.runInContext(readSource("background.js"), worker);
+  }
+  startWorker();
 
   return {
     badge, notifications, logs, clients, local, session, startupListeners, installedListeners,
     requestedOrigins, meetTab,
+    stopWorker() { listeners.length = 0; },
+    stopOffscreenMessages() { offscreenListeners.length = 0; },
+    closeOffscreen: () => chrome.offscreen.closeDocument(),
+    restartWorker: startWorker,
+    restartChrome() {
+      contexts.length = 0;
+      offscreenListeners.length = 0;
+      reconnectTimers.clear();
+      Object.keys(session).forEach(key => delete session[key]);
+      startWorker();
+      startupListeners.forEach(listener => listener());
+    },
+    retryConnection() {
+      const timers = [...reconnectTimers.values()];
+      reconnectTimers.clear();
+      timers.forEach(callback => callback());
+    },
     denyHostPermission() { grantsHostPermission = false; },
     revokeHostPermission() { hasHostPermission = false; },
     failNotifications() { notificationsFail = true; },
@@ -182,7 +254,7 @@ test("credenziali assenti: badge rosso, nessun login e nessuna notifica", async 
   assert.deepEqual(bridge.notifications, []);
 });
 
-test("avvio e installazione collegano il Centralino senza una scheda Collaboration", async () => {
+test("avvio di Chrome e installazione collegano il Centralino senza una scheda Collaboration", async () => {
   const bridge = createCentralinoHarness(credentials);
   await flush();
   assert.equal(bridge.clients.length, 1);
@@ -192,6 +264,20 @@ test("avvio e installazione collegano il Centralino senza una scheda Collaborati
   for (const listener of bridge.installedListeners) listener({ reason: "install" });
   await flush();
   assert.equal(bridge.clients.length, 1);
+
+  bridge.restartChrome();
+  await flush();
+  const client = bridge.clients.at(-1);
+  assert.equal(bridge.clients.length, 2);
+  assert.deepEqual(client.credentials, credentials);
+  assert.equal(client.hasStarted, true);
+  client.emit("connected");
+  client.receiveCallsState([{
+    getChannel: () => "SIP/123-riavvio", getState: () => "hold", getDirection: () => "outgoing"
+  }]);
+  await flush();
+  assert.equal(bridge.badge.text, "");
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
 });
 
 test("badge e notifiche seguono solo i cambi del collegamento, non i tentativi", async () => {
@@ -324,6 +410,8 @@ test("eventi Occupato/Libero di un collegamento sostituito non comandano Meet", 
   const call = {
     getChannel: () => "SIP/123-001", getState: () => "ring", getDirection: () => "incoming"
   };
+  oldClient.receiveCallsState();
+  client.receiveCallsState();
   oldClient.calls = [call];
   oldClient.emit("call_added", call);
   await flush();
@@ -343,6 +431,7 @@ test("le terminazioni sintetiche della WTAPI allo scollegamento non riaprono Mee
   await flush();
   const client = bridge.clients[0];
   client.emit("connected");
+  client.receiveCallsState();
   const call = {
     getChannel: () => "SIP/123-001", getState: () => "up", getDirection: () => "incoming"
   };
@@ -354,6 +443,129 @@ test("le terminazioni sintetiche della WTAPI allo scollegamento non riaprono Mee
   await flush();
   assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
+});
+
+test("la riconnessione attende lo stato del Centralino prima di riaprire Meet", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  const client = bridge.clients[0];
+  const call = {
+    getChannel: () => "SIP/123-001", getState: () => "up", getDirection: () => "incoming"
+  };
+  client.emit("connected");
+  client.receiveCallsState([call]);
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+
+  client.emit("disconnected");
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+  client.emit("connected");
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+  client.receiveCallsState([call]);
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+  bridge.retryConnection();
+  await flush();
+  assert.equal(bridge.clients.length, 1);
+});
+
+test("ritenti automatici senza notifiche ripetute riallineano a Libero una Chiamata Wildix finita offline", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  const client = bridge.clients[0];
+  const call = {
+    getChannel: () => "SIP/123-001", getState: () => "up", getDirection: () => "incoming"
+  };
+  client.emit("connected");
+  client.receiveCallsState([call]);
+  await flush();
+  client.emit("disconnected");
+  client.emit("disconnected");
+  await flush();
+  assert.equal(bridge.badge.text, "!");
+  assert.equal(bridge.notifications.length, 2);
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+
+  bridge.retryConnection();
+  await flush();
+  assert.equal(bridge.clients.at(-1).hasStarted, true);
+  assert.equal(bridge.clients.length, 2);
+  bridge.clients.at(-1).emit("disconnected");
+  await flush();
+  bridge.retryConnection();
+  await flush();
+  assert.equal(bridge.clients.length, 3);
+  assert.equal(bridge.notifications.length, 2);
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+
+  const reconnectedClient = bridge.clients.at(-1);
+  reconnectedClient.emit("connected");
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+  reconnectedClient.receiveCallsState([]);
+  await flush();
+  assert.equal(bridge.badge.text, "");
+  assert.equal(bridge.notifications.length, 3);
+  assert.equal(bridge.meetTab.mutedInfo.muted, false);
+});
+
+test("il service worker riavviato si riallinea al documento offscreen senza notifiche spurie", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  const client = bridge.clients[0];
+  const call = {
+    getChannel: () => "SIP/123-001", getState: () => "up", getDirection: () => "incoming"
+  };
+  client.emit("connected");
+  client.receiveCallsState([call]);
+  await flush();
+  bridge.stopWorker();
+  client.calls = [];
+  client.emit("call_terminated", call);
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+
+  bridge.restartWorker();
+  await flush();
+  assert.equal(bridge.clients.length, 1);
+  assert.equal(bridge.badge.text, "");
+  assert.equal(bridge.meetTab.mutedInfo.muted, false);
+  assert.equal(bridge.notifications.length, 1);
+});
+
+test("senza documento offscreen il worker riavviato ricollega il Centralino e ripristina Meet", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  const call = {
+    getChannel: () => "SIP/123-001", getState: () => "up", getDirection: () => "incoming"
+  };
+  bridge.clients[0].emit("connected");
+  bridge.clients[0].receiveCallsState([call]);
+  await flush();
+  await bridge.closeOffscreen();
+  bridge.restartWorker();
+  await flush();
+  const client = bridge.clients.at(-1);
+  assert.equal(client.hasStarted, true);
+  assert.equal(bridge.badge.text, "!");
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+  client.emit("connected");
+  client.receiveCallsState([]);
+  await flush();
+  assert.equal(bridge.badge.text, "");
+  assert.equal(bridge.meetTab.mutedInfo.muted, false);
+});
+
+test("un documento offscreen senza risposta viene sostituito dopo il riavvio del worker", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  bridge.stopOffscreenMessages();
+  bridge.restartWorker();
+  await flush();
+  assert.equal(bridge.clients.length, 2);
+  assert.equal(bridge.clients.at(-1).hasStarted, true);
 });
 
 test("messaggi Occupato/Libero malformati dal documento offscreen non comandano Meet", async () => {

@@ -43,7 +43,20 @@ async function startCentralinoConnection(restart = false) {
     documentUrls: [chrome.runtime.getURL("src/offscreen.html")]
   });
   if (!restart && contexts.length && centralinoSettings) {
-    return;
+    const { centralinoConnectionId } = await chrome.storage.session.get("centralinoConnectionId");
+    if (centralinoConnectionId) {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "CENTRALINO_SYNC", connectionId: centralinoConnectionId
+        });
+        if (response?.ok === true) {
+          return;
+        }
+      } catch {
+        // A document can still exist without a live message listener.
+      }
+      console.warn(`${CENTRALINO_PREFIX} Documento offscreen non disponibile: riavvio il collegamento`);
+    }
   }
   await chrome.storage.session.set({ centralinoConnectionId: null });
   if (contexts.length) {

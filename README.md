@@ -73,7 +73,9 @@ git push origin main
 
 Con Chrome 116 o successivo, aprire **Dettagli → Opzioni estensione** da `chrome://extensions` e salvare Interno, password e indirizzo HTTPS del Centralino. L'indirizzo aziendale è precompilato; scegliendone un altro Chrome chiede il permesso per quel solo indirizzo. Le credenziali sono salvate in `chrome.storage.local`, solo nel profilo Chrome e senza cifratura, e non sono accessibili ai content script.
 
-Le opzioni mostrano **Collegato** o **Scollegato**. Il badge rosso **!** indica che il collegamento manca; le notifiche segnalano solo i cambi di collegamento, non i tentativi falliti ripetuti. Il collegamento parte anche all'avvio di Chrome e all'installazione, senza una scheda Wildix Collaboration aperta.
+Le opzioni mostrano **Collegato** o **Scollegato**. Il badge rosso **!** indica che il collegamento manca; le notifiche segnalano solo i cambi di collegamento, non i tentativi falliti ripetuti. Il collegamento parte anche all'avvio di Chrome e all'installazione, senza una scheda Wildix Collaboration aperta, e si riallinea dopo il riavvio del service worker.
+
+Se il collegamento cade, lo stato **Occupato/Libero** resta invariato: Meet non viene riaperto durante una Chiamata Wildix. L'estensione ritenta il collegamento automaticamente dopo 5 secondi e, alla riconnessione, attende l'elenco delle chiamate dal Centralino prima di riallineare Meet, anche quando l'elenco è vuoto.
 
 Gli eventi del Centralino sono l'unica fonte dello stato **Occupato/Libero** che comanda Meet: basta una chiamata attiva, in squillo, risposta o attesa, su qualunque dispositivo dell'Interno. Le chiamate sovrapposte mantengono Meet silenziato fino all'ultima chiusura. Nessuno script dell'estensione gira su Wildix Collaboration: il vecchio rilevamento da pulsanti e WebRTC è stato eliminato.
 
@@ -81,7 +83,7 @@ Per i log di `call_added`, `call_updated` e `call_terminated`, aprire `chrome://
 
 La libreria inclusa in `src/wtapi.js` è **WTAPI v1.0.2**, copia invariata di <https://automaticmachines.wildixin.com/public/wtapi.js>, scaricata il 13/10/2026 (Last-Modified: 22/06/2026). SHA-256: `384cefab95377c936f637450604862f1f6d23ecea07a68396b51a601e38d4da9`. Chrome non carica codice remoto; le risposte HTTP della libreria sono forzate a JSON per evitare valutazione di JavaScript remoto.
 
-WTAPI v1 è deprecata: vedi [ADR 0001](docs/adr/0001-occupato-dagli-eventi-del-centralino.md). Login ed eventi reali dall'estensione, inclusa l'eventuale restrizione sull'origine `chrome-extension://`, vanno verificati con credenziali vere nella #4. La riconnessione completa è prevista nella #6; la release e l'aggiornamento complessivo di questo README nella #7.
+WTAPI v1 è deprecata: vedi [ADR 0001](docs/adr/0001-occupato-dagli-eventi-del-centralino.md). Login ed eventi reali dall'estensione, inclusa l'eventuale restrizione sull'origine `chrome-extension://`, vanno verificati con credenziali vere nella #4. La release e l'aggiornamento complessivo di questo README sono previsti nella #7.
 
 ## Test automatici
 

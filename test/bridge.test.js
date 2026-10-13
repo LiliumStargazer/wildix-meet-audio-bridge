@@ -117,6 +117,13 @@ function createHarness({ tabMuted = false } = {}) {
     constructor() {
       this.listeners = {};
       this.calls = [];
+      this.messageHandlers = [{ priority: 10, callback: packet => {
+        const event = packet.getChild("event", "urn:wildix:ami");
+        if (!event) return false;
+        this.calls = event.calls;
+        this.calls.forEach(call => this.listeners.call_added(call));
+        return true;
+      } }];
       this.telephony = {
         on: (event, listener) => { this.listeners[event] = listener; },
         getActiveCalls: () => this.calls.slice()
@@ -124,7 +131,24 @@ function createHarness({ tabMuted = false } = {}) {
       clients.push(this);
     }
     on(event, listener) { this.listeners[event] = listener; }
-    connect() { this.listeners.connected(); }
+    connect() {
+      this.listeners.connected();
+      this.receiveCallsState();
+    }
+    disconnect() {
+      this.calls.forEach(call => this.listeners.call_terminated(call));
+      this.calls = [];
+      this.listeners.disconnected();
+    }
+    registerHandler(event, callback, scope, priority) {
+      this.messageHandlers.push({ priority, callback: packet => callback.call(scope, packet) });
+      this.messageHandlers.sort((first, second) => first.priority - second.priority);
+    }
+    receiveCallsState(calls = this.calls) {
+      const packet = { getChild: (name, namespace) => namespace === "urn:wildix:ami"
+        ? { calls, getAttribute: () => "state" } : null };
+      this.messageHandlers.some(handler => handler.callback(packet));
+    }
     addCall({ channel = "SIP/123-001", state = "ring", direction = "incoming" } = {}) {
       const call = {
         state,
@@ -185,9 +209,13 @@ function createHarness({ tabMuted = false } = {}) {
           contexts.push({ documentUrl: "chrome-extension://bridge/src/offscreen.html" });
           vm.runInNewContext(readSource("offscreen.js"), {
             console: silentConsole, WTAPI: FakeWTAPI, queueMicrotask,
-            chrome: { runtime: { sendMessage: message => sendBackgroundMessage(message, {
-              url: "chrome-extension://bridge/src/offscreen.html"
-            }) } }
+            setTimeout: () => 1, clearTimeout() {},
+            chrome: { runtime: {
+              onMessage: { addListener() {} },
+              sendMessage: message => sendBackgroundMessage(message, {
+                url: "chrome-extension://bridge/src/offscreen.html"
+              })
+            } }
           });
         },
         closeDocument: async () => { contexts.length = 0; }
@@ -257,6 +285,18 @@ function createHarness({ tabMuted = false } = {}) {
     },
     async updateCall(channel, state) {
       clients.at(-1).updateCall(channel, state);
+      await flush();
+    },
+    async disconnectCentralino() {
+      clients.at(-1).disconnect();
+      await flush();
+    },
+    async reconnectCentralino() {
+      clients.at(-1).listeners.connected();
+      await flush();
+    },
+    async receiveCallsState() {
+      clients.at(-1).receiveCallsState();
       await flush();
     },
     async sendTabMessage(message) {
@@ -598,6 +638,50 @@ describe("Silenziare Meet", () => {
     bridge.tab.url = "https://automaticmachines.wildixin.com/";
     await bridge.install("install");
     assert.deepEqual(bridge.injections, []);
+  });
+});
+
+describe("Ripresa del collegamento al Centralino", () => {
+  test("Meet resta silenziato durante lo scollegamento e torna allo Stato precedente dopo lo stato Libero", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    await flush();
+    const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
+    const alreadyMutedTab = await bridge.addMeetTab(true);
+    await bridge.addCall();
+    await bridge.disconnectCentralino();
+    assert.equal(mic.sample(), 0);
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    const newMeetTab = await bridge.addMeetTab();
+    assert.equal(newMeetTab.mutedInfo.muted, true);
+
+    await bridge.reconnectCentralino();
+    assert.equal(mic.sample(), 0);
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    await bridge.receiveCallsState();
+    assert.equal(mic.sample(), 1);
+    assert.equal(bridge.tab.mutedInfo.muted, false);
+    assert.equal(newMeetTab.mutedInfo.muted, false);
+    assert.equal(alreadyMutedTab.mutedInfo.muted, true);
+  });
+
+  test("Libero resta invariato offline; una nuova Chiamata Wildix nella riconnessione silenzia Meet", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    await flush();
+    const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
+    await bridge.disconnectCentralino();
+    await bridge.addCall({ channel: "SIP/123-offline", direction: "outgoing" });
+    assert.equal(mic.sample(), 1);
+    assert.equal(bridge.tab.mutedInfo.muted, false);
+
+    await bridge.reconnectCentralino();
+    await bridge.receiveCallsState();
+    assert.equal(mic.sample(), 0);
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    await bridge.terminateCall("SIP/123-offline");
+    assert.equal(mic.sample(), 1);
+    assert.equal(bridge.tab.mutedInfo.muted, false);
   });
 });
 

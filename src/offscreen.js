@@ -1,12 +1,22 @@
+let reconnectTimer;
+
+function scheduleCentralinoReconnect() {
+  if (reconnectTimer === undefined) {
+    // Reload also disposes WTAPI's timers; its failed initial login never retries.
+    reconnectTimer = setTimeout(() => location.reload(), 5000);
+  }
+}
+
 (async () => {
   const { settings, connectionId } = await chrome.runtime.sendMessage({ type: "CENTRALINO_GET_SETTINGS" });
   const wtapi = new WTAPI(settings.interno, settings.password, settings.url);
   // MV3 forbids evaluating a server response as JavaScript.
   WTAPI.ajax.settings.dataType = "json";
   let isConnected = false;
+  let hasCallsState = false;
 
   function reportInternoOccupato() {
-    if (!isConnected) {
+    if (!isConnected || !hasCallsState) {
       return;
     }
     const calls = wtapi.telephony.getActiveCalls().map(call => ({
@@ -19,17 +29,44 @@
     });
   }
 
+  function reportCentralinoConnection() {
+    chrome.runtime.sendMessage({
+      type: "CENTRALINO_CONNECTION_CHANGED", connected: isConnected, connectionId
+    }).catch(() => {
+      console.error("[Wildix Meet Audio Bridge] Impossibile comunicare lo stato del Centralino");
+    });
+  }
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (sender.id === chrome.runtime.id && !sender.tab &&
+        message.type === "CENTRALINO_SYNC" && message.connectionId === connectionId) {
+      reportCentralinoConnection();
+      queueMicrotask(reportInternoOccupato);
+      sendResponse({ ok: true });
+    }
+  });
+
+  // Observe even an empty state before WTAPI's telephony handler consumes it.
+  wtapi.registerHandler("message", packet => {
+    const event = packet.getChild("event", "urn:wildix:ami");
+    if (isConnected && event?.getAttribute("type") === "state") {
+      hasCallsState = true;
+      queueMicrotask(reportInternoOccupato);
+    }
+    return false;
+  }, null, 0);
+
   for (const [event, connected] of [["connected", true], ["disconnected", false]]) {
     wtapi.on(event, () => {
       isConnected = connected;
+      hasCallsState = false;
       if (connected) {
-        queueMicrotask(reportInternoOccupato);
+        clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+      } else {
+        scheduleCentralinoReconnect();
       }
-      chrome.runtime.sendMessage({
-        type: "CENTRALINO_CONNECTION_CHANGED", connected, connectionId
-      }).catch(() => {
-        console.error("[Wildix Meet Audio Bridge] Impossibile comunicare lo stato del Centralino");
-      });
+      reportCentralinoConnection();
     });
   }
   for (const event of ["call_added", "call_updated", "call_terminated"]) {
@@ -44,4 +81,5 @@
   wtapi.connect();
 })().catch(() => {
   console.error("[Wildix Meet Audio Bridge] Impossibile collegarsi al Centralino");
+  scheduleCentralinoReconnect();
 });
