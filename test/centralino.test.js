@@ -120,7 +120,19 @@ function createCentralinoHarness(settings = null) {
       }
     },
     action: {
-      setIcon: async ({ path }) => { icon.path = structuredClone(path); },
+      setIcon: async ({ path: iconPaths }) => {
+        const resolvedPaths = {};
+        for (const [size, iconPath] of Object.entries(iconPaths)) {
+          // Chrome's service-worker binding fetches paths relative to the worker URL.
+          const iconUrl = new URL(iconPath, getURL("src/background.js"));
+          const file = iconUrl.pathname.slice(1);
+          if (!fs.existsSync(path.join(__dirname, "..", file))) {
+            throw new Error(`Failed to set icon '${iconPath}': Failed to fetch`);
+          }
+          resolvedPaths[size] = file;
+        }
+        icon.path = resolvedPaths;
+      },
       setBadgeText: async ({ text }) => { badge.text = text; },
       setBadgeBackgroundColor: async ({ color }) => { badge.color = color; }
     },
@@ -446,6 +458,7 @@ test("le credenziali salvate mostrano il riepilogo, ma Collegato solo dopo la co
   };
   assert.deepEqual(bridge.requestedOrigins, ["https://altro.wildixin.com/*"]);
   assert.deepEqual(bridge.local.centralinoSettings, savedCredentials);
+  assert.equal(popup.elements["save-status"].textContent, "Credenziali salvate. Collegamento al Centralino avviato.");
   assert.equal(bridge.clients.length, 1);
   assert.deepEqual(bridge.clients[0].credentials, savedCredentials);
   assert.equal(popup.elements["centralino-form"].hidden, true);
@@ -453,7 +466,6 @@ test("le credenziali salvate mostrano il riepilogo, ma Collegato solo dopo la co
   assert.equal(popup.elements["summary-interno"].textContent, "456");
   assert.equal(popup.elements.password.value, "");
   assert.equal(popup.elements["connection-status"].textContent, "Scollegato — riconnessione automatica");
-  assert.match(popup.elements["save-status"].textContent, /salvate/);
   assert.deepEqual(bridge.icon.path, redIconPaths);
   assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.notifications.length, 0);

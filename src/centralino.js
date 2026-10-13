@@ -6,7 +6,8 @@ async function setCentralinoConnected(connected) {
   const { centralinoConnected } = await chrome.storage.session.get("centralinoConnected");
   const iconColor = connected ? "green" : "red";
   await chrome.action.setIcon({ path: {
-    16: `icons/icon16-${iconColor}.png`, 32: `icons/icon32-${iconColor}.png`
+    16: chrome.runtime.getURL(`icons/icon16-${iconColor}.png`),
+    32: chrome.runtime.getURL(`icons/icon32-${iconColor}.png`)
   } });
   await chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
   await chrome.action.setBadgeText({ text: connected ? "" : "!" });
