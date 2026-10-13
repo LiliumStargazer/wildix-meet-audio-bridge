@@ -1,15 +1,15 @@
 # Wildix Meet Audio Bridge
 
-Estensione Chrome che silenzia automaticamente Google Meet quando Wildix Collaboration sta gestendo una chiamata.
+Estensione Chrome che silenzia automaticamente Google Meet quando l'Interno è Occupato, secondo gli eventi del Centralino Wildix.
 
 ## Funzionamento
 
-Quando Wildix riceve o gestisce una chiamata:
+Quando il Centralino segnala una Chiamata Wildix in entrata (già dallo squillo) o in uscita:
 
 - chiude il segnale del microfono che Google Meet riceve da Chrome, senza toccare il pulsante microfono di Meet;
 - silenzia completamente l'audio della scheda Google Meet.
 
-Quando la chiamata Wildix termina:
+Quando termina l'ultima Chiamata Wildix, anche se altre erano in attesa:
 
 - riapre il segnale del microfono; il pulsante di Meet resta come l'utente l'ha lasciato, anche se lo ha cambiato durante la chiamata;
 - ripristina lo stato precedente dell'audio della scheda Meet.
@@ -41,13 +41,19 @@ wildix-meet-audio-bridge/
 ├── icons/
 │   └── icon128.png     icona dell'estensione e delle notifiche
 ├── src/
-│   ├── background.js   stato Wildix globale e audio delle schede Meet
+│   ├── background.js   stato Occupato/Libero e audio delle schede Meet
+│   ├── centralino.js   avvio del collegamento, badge e notifiche
+│   ├── centralino-settings.js  validazione delle opzioni
+│   ├── offscreen.html  documento che ospita WTAPI
+│   ├── offscreen.js    eventi del Centralino e chiamate attive
+│   ├── wtapi.js        libreria WTAPI v1 inclusa
+│   ├── options.html    pagina di opzioni
+│   ├── options.js      salvataggio e stato del collegamento
 │   ├── meet-audio.js   controllo del segnale microfono prima degli script di Meet
-│   ├── meet.js         inoltro dello stato Occupato/Libero alla pagina Meet
-│   ├── wildix.js       rilevamento chiamata dall'interfaccia Wildix
-│   └── wildix-rtc.js   rilevamento chiamata dalle connessioni WebRTC di Wildix
+│   └── meet.js         inoltro dello stato Occupato/Libero alla pagina Meet
 └── test/
-    └── bridge.test.js  test automatici
+    ├── bridge.test.js     test audio e stato Occupato/Libero
+    └── centralino.test.js test collegamento e opzioni
 ```
 
 ## Sviluppo
@@ -63,13 +69,15 @@ git commit -m "Descrizione modifica"
 git push origin main
 ```
 
-## Collegamento al Centralino (in sviluppo, #2)
+## Collegamento al Centralino
 
 Con Chrome 116 o successivo, aprire **Dettagli → Opzioni estensione** da `chrome://extensions` e salvare Interno, password e indirizzo HTTPS del Centralino. L'indirizzo aziendale è precompilato; scegliendone un altro Chrome chiede il permesso per quel solo indirizzo. Le credenziali sono salvate in `chrome.storage.local`, solo nel profilo Chrome e senza cifratura, e non sono accessibili ai content script.
 
 Le opzioni mostrano **Collegato** o **Scollegato**. Il badge rosso **!** indica che il collegamento manca; le notifiche segnalano solo i cambi di collegamento, non i tentativi falliti ripetuti. Il collegamento parte anche all'avvio di Chrome e all'installazione, senza una scheda Wildix Collaboration aperta.
 
-Questa prima parte registra gli eventi del Centralino **senza usarli per comandare Meet**: il vecchio rilevamento resta fino alla #5. Per i log di `call_added`, `call_updated` e `call_terminated`, aprire `chrome://extensions`, abilitare Modalità sviluppatore e ispezionare il documento `src/offscreen.html`; i cambi di collegamento compaiono nella console del service worker.
+Gli eventi del Centralino sono l'unica fonte dello stato **Occupato/Libero** che comanda Meet: basta una chiamata attiva, in squillo, risposta o attesa, su qualunque dispositivo dell'Interno. Le chiamate sovrapposte mantengono Meet silenziato fino all'ultima chiusura. Nessuno script dell'estensione gira su Wildix Collaboration: il vecchio rilevamento da pulsanti e WebRTC è stato eliminato.
+
+Per i log di `call_added`, `call_updated` e `call_terminated`, aprire `chrome://extensions`, abilitare Modalità sviluppatore e ispezionare il documento `src/offscreen.html`; i cambi Occupato/Libero e di collegamento compaiono nella console del service worker.
 
 La libreria inclusa in `src/wtapi.js` è **WTAPI v1.0.2**, copia invariata di <https://automaticmachines.wildixin.com/public/wtapi.js>, scaricata il 13/10/2026 (Last-Modified: 22/06/2026). SHA-256: `384cefab95377c936f637450604862f1f6d23ecea07a68396b51a601e38d4da9`. Chrome non carica codice remoto; le risposte HTTP della libreria sono forzate a JSON per evitare valutazione di JavaScript remoto.
 
@@ -229,14 +237,14 @@ wildix-meet-audio-bridge-v0.2.1/
 
 Non selezionare direttamente la cartella `src`.
 
-## 5. Ricaricare Wildix e Google Meet
+## 5. Configurare il Centralino e ricaricare Google Meet
 
 Dopo l'installazione:
 
-1. ricaricare la pagina Google Meet;
-2. chiudere e riaprire Wildix Collaboration oppure ricaricarlo.
+1. aprire le opzioni dell'estensione, salvare Interno e password e verificare **Collegato**;
+2. ricaricare le schede Google Meet già aperte.
 
-Il ricaricamento di Wildix è necessario perché il rilevamento delle chiamate tramite WebRTC deve partire prima della pagina.
+Non serve ricaricare o tenere aperta Wildix Collaboration: le Chiamate Wildix arrivano dal Centralino.
 
 ## Test
 
@@ -297,7 +305,7 @@ Ricarica
 
 della scheda **Wildix Meet Audio Bridge**.
 
-Infine ricaricare Wildix e le schede Google Meet già aperte, come richiesto dalla notifica dell'estensione.
+Infine ricaricare le schede Google Meet già aperte, come richiesto dalla notifica dell'estensione.
 
 Non aggiornare l'estensione durante una chiamata Wildix: Chrome cancella lo stato salvato e Meet resterebbe silenziato al termine della chiamata.
 
@@ -309,9 +317,9 @@ Per controllare il funzionamento dell'estensione:
 
 Aprire gli strumenti sviluppatore della pagina Meet e controllare la Console.
 
-## Wildix
+## Centralino
 
-Aprire gli strumenti sviluppatore della pagina Wildix e controllare la Console.
+Da `chrome://extensions` ispezionare `src/offscreen.html` per gli eventi di Chiamata Wildix. Non servono gli strumenti sviluppatore di Wildix Collaboration.
 
 ## Background dell'estensione
 

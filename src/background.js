@@ -5,8 +5,7 @@ const PREFIX = `[Wildix Meet Audio Bridge v${VERSION}]`;
 
 const MEET_URL = "https://meet.google.com/*";
 
-// Every state change goes through here. Each step is short (storage and tab
-// audio only: the Meet mic is handled by meet.js), so nothing waits for long.
+// Serialize tab audio changes; Meet handles its microphone signal separately.
 let operationQueue = Promise.resolve();
 
 function enqueueOperation(label, operation) {
@@ -22,11 +21,10 @@ function enqueueOperation(label, operation) {
   return result;
 }
 
-// wildixStates: Wildix tab id -> busy. originalTabMuted: Meet tab id -> tab
-// audio muted before the call.
+// originalTabMuted: Meet tab id -> tab audio before the Interno became Occupato.
 const getSessionState = () =>
   chrome.storage.session.get({
-    wildixStates: {},
+    internoOccupato: false,
     originalTabMuted: {}
   });
 
@@ -45,19 +43,15 @@ async function setTabMuted(tabId, muted) {
   }
 }
 
-// Brings the Meet tabs in line with the Wildix state: tab audio here, the mic
-// in meet.js once it receives WILDIX_BUSY.
+// Tab audio here; the microphone signal follows WILDIX_BUSY in Meet.
 async function syncMeetTabs() {
-  const { wildixStates, originalTabMuted } =
+  const { internoOccupato: isOccupato, originalTabMuted } =
     await getSessionState();
-
-  const busy =
-    Object.values(wildixStates).some(Boolean);
 
   const meetTabs =
     await chrome.tabs.query({ url: MEET_URL });
 
-  if (busy) {
+  if (isOccupato) {
     for (const tab of meetTabs) {
       if (!(tab.id in originalTabMuted)) {
         originalTabMuted[tab.id] =
@@ -80,7 +74,7 @@ async function syncMeetTabs() {
   for (const tab of meetTabs) {
     chrome.tabs.sendMessage(tab.id, {
       type: "WILDIX_BUSY",
-      busy
+      busy: isOccupato
     }).catch(() => {
       // meet.js not loaded yet: it sends MEET_READY when it starts.
     });
@@ -89,27 +83,26 @@ async function syncMeetTabs() {
 
 chrome.runtime.onMessage.addListener(
   (message, sender) => {
-    const tabId = sender.tab?.id;
-
-    if (!tabId) {
+    if (sender.url === chrome.runtime.getURL("src/offscreen.html") && !sender.tab &&
+        message.type === "CENTRALINO_STATE_CHANGED" &&
+        typeof message.occupato === "boolean" && Array.isArray(message.calls)) {
+      enqueueCentralinoOperation(() => enqueueOperation("Stato del Centralino", async () => {
+        const { centralinoConnectionId } = await chrome.storage.session.get("centralinoConnectionId");
+        if (!centralinoConnectionId || message.connectionId !== centralinoConnectionId) {
+          return;
+        }
+        const { internoOccupato } = await getSessionState();
+        await chrome.storage.session.set({ internoOccupato: message.occupato });
+        if (internoOccupato !== message.occupato) {
+          console.log(`${PREFIX} Interno ${message.occupato ? "Occupato" : "Libero"}`, message.calls);
+        }
+        await syncMeetTabs();
+      }));
       return;
     }
 
-    if (message.type === "WILDIX_STATE_CHANGED") {
-      enqueueOperation(
-        `Wildix tab ${tabId} -> ${message.busy ? "BUSY" : "FREE"}`,
-        async () => {
-          const { wildixStates } = await getSessionState();
-
-          wildixStates[tabId] = message.busy === true;
-
-          await chrome.storage.session.set({ wildixStates });
-          await syncMeetTabs();
-        }
-      );
-    }
-
-    if (message.type === "MEET_READY") {
+    const tabId = sender.tab?.id;
+    if (tabId && message.type === "MEET_READY") {
       enqueueOperation(
         `Meet tab ${tabId} ready`,
         syncMeetTabs
@@ -120,13 +113,10 @@ chrome.runtime.onMessage.addListener(
 
 chrome.tabs.onRemoved.addListener(tabId => {
   enqueueOperation(`Tab ${tabId} removed`, async () => {
-    const { wildixStates, originalTabMuted } =
-      await getSessionState();
-
-    delete wildixStates[tabId];
+    const { originalTabMuted } = await getSessionState();
     delete originalTabMuted[tabId];
 
-    await chrome.storage.session.set({ wildixStates, originalTabMuted });
+    await chrome.storage.session.set({ originalTabMuted });
     await syncMeetTabs();
   });
 });
@@ -145,24 +135,6 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   }).catch(error => {
     console.warn(`${PREFIX} Impossibile mostrare la notifica di ricaricamento Meet`, error);
   });
-
-  for (const { matches, js, world = "ISOLATED" } of chrome.runtime.getManifest().content_scripts) {
-    if (matches.includes(MEET_URL)) {
-      continue;
-    }
-    for (const tab of await chrome.tabs.query({ url: matches })) {
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: js,
-        world
-      }).catch(error => {
-        console.warn(
-          `${PREFIX} Tab ${tab.id}: impossibile iniettare ${js}`,
-          error
-        );
-      });
-    }
-  }
 });
 
 console.log(

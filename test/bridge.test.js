@@ -9,7 +9,6 @@ const vm = require("node:vm");
 const readSource = file =>
   fs.readFileSync(path.join(__dirname, "..", "src", file), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const silentConsole = { log() {}, warn() {}, error() {} };
 
@@ -23,7 +22,11 @@ function createHarness({ tabMuted = false } = {}) {
   const requests = [];
   const microphones = [];
   const audioContexts = [];
+  const clients = [];
+  const contexts = [];
   const tab = { id: 1, url: "https://meet.google.com/abc", mutedInfo: { muted: tabMuted } };
+  const tabs = [tab];
+  const removedListeners = [];
   const window = new EventTarget();
   let captureError = null;
   let audioError = null;
@@ -100,13 +103,58 @@ function createHarness({ tabMuted = false } = {}) {
       return stream;
     }
   };
+  function sendBackgroundMessage(message, sender) {
+    return new Promise(resolve => {
+      let hasResponse = false;
+      for (const listener of backgroundListeners) {
+        if (listener(message, sender, resolve) === true) hasResponse = true;
+      }
+      if (!hasResponse) resolve();
+    });
+  }
+  class FakeWTAPI {
+    static ajax = { settings: {} };
+    constructor() {
+      this.listeners = {};
+      this.calls = [];
+      this.telephony = {
+        on: (event, listener) => { this.listeners[event] = listener; },
+        getActiveCalls: () => this.calls.slice()
+      };
+      clients.push(this);
+    }
+    on(event, listener) { this.listeners[event] = listener; }
+    connect() { this.listeners.connected(); }
+    addCall({ channel = "SIP/123-001", state = "ring", direction = "incoming" } = {}) {
+      const call = {
+        state,
+        getChannel: () => channel,
+        getState() { return this.state; },
+        getDirection: () => direction
+      };
+      this.calls.push(call);
+      this.listeners.call_added(call);
+    }
+    updateCall(channel, state) {
+      const call = this.calls.find(call => call.getChannel() === channel);
+      call.state = state;
+      this.listeners.call_updated(call);
+    }
+    terminateCall(channel = "SIP/123-001") {
+      const call = this.calls.find(call => call.getChannel() === channel);
+      // WTAPI v1 emits termination before removing the call from its list.
+      this.listeners.call_terminated(call);
+      this.calls = this.calls.filter(call => call.getChannel() !== channel);
+    }
+  }
+
   const background = vm.createContext({
-    console: silentConsole,
+    console: silentConsole, URL, crypto,
     chrome: {
       runtime: {
         getManifest: () => manifest,
         getURL: file => `chrome-extension://bridge/${file}`,
-        getContexts: async () => [],
+        getContexts: async () => structuredClone(contexts),
         onMessage: { addListener: listener => backgroundListeners.push(listener) },
         onInstalled: { addListener: listener => installedListeners.push(listener) },
         onStartup: { addListener() {} }
@@ -118,7 +166,12 @@ function createHarness({ tabMuted = false } = {}) {
       scripting: { executeScript: async options => { injections.push(options); } },
       action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
       storage: {
-        local: { get: async () => ({}), setAccessLevel: async () => {} },
+        local: {
+          get: async () => ({ centralinoSettings: {
+            interno: "123", password: "password-di-test", url: "https://automaticmachines.wildixin.com"
+          } }),
+          setAccessLevel: async () => {}
+        },
         session: {
           get: async defaults => structuredClone(typeof defaults === "string"
             ? { [defaults]: store[defaults] }
@@ -126,18 +179,35 @@ function createHarness({ tabMuted = false } = {}) {
           set: async values => Object.assign(store, structuredClone(values))
         }
       },
+      permissions: { contains: async () => true },
+      offscreen: {
+        createDocument: async () => {
+          contexts.push({ documentUrl: "chrome-extension://bridge/src/offscreen.html" });
+          vm.runInNewContext(readSource("offscreen.js"), {
+            console: silentConsole, WTAPI: FakeWTAPI, queueMicrotask,
+            chrome: { runtime: { sendMessage: message => sendBackgroundMessage(message, {
+              url: "chrome-extension://bridge/src/offscreen.html"
+            }) } }
+          });
+        },
+        closeDocument: async () => { contexts.length = 0; }
+      },
       tabs: {
         query: async ({ url }) => {
           const patterns = Array.isArray(url) ? url : [url];
-          return patterns.some(pattern => tab.url.startsWith(pattern.replace(/\*$/, "")))
-            ? [structuredClone(tab)] : [];
+          return tabs.filter(tab => patterns.some(pattern =>
+            tab.url.startsWith(pattern.replace(/\*$/, "")))).map(tab => structuredClone(tab));
         },
-        update: async (id, { muted }) => { tab.mutedInfo.muted = muted; },
+        update: async (id, { muted }) => {
+          const target = tabs.find(tab => tab.id === id);
+          if (!target) throw new Error("Tab closed");
+          target.mutedInfo.muted = muted;
+        },
         sendMessage: async (id, message) => {
-          if (!meetListeners.length) throw new Error("Receiving end does not exist");
+          if (id !== tab.id || !meetListeners.length) throw new Error("Receiving end does not exist");
           meetListeners.forEach(listener => listener(message));
         },
-        onRemoved: { addListener() {} }
+        onRemoved: { addListener: listener => removedListeners.push(listener) }
       }
     }
   });
@@ -176,10 +246,35 @@ function createHarness({ tabMuted = false } = {}) {
       vm.runInContext(readSource("meet.js"), isolated);
     },
     getUserMedia: constraints => mediaDevices.getUserMedia(constraints),
-    async setWildixBusy(busy) {
-      backgroundListeners.forEach(listener => listener(
-        { type: "WILDIX_STATE_CHANGED", busy }, { tab: { id: 99 } }
-      ));
+    async addCall(call) {
+      await flush();
+      clients.at(-1).addCall(call);
+      await flush();
+    },
+    async terminateCall(channel) {
+      clients.at(-1).terminateCall(channel);
+      await flush();
+    },
+    async updateCall(channel, state) {
+      clients.at(-1).updateCall(channel, state);
+      await flush();
+    },
+    async sendTabMessage(message) {
+      await sendBackgroundMessage({ connectionId: store.centralinoConnectionId, ...message }, {
+        tab: { id: 99 }, url: "https://automaticmachines.wildixin.com/"
+      });
+      await flush();
+    },
+    async addMeetTab(muted = false) {
+      const addedTab = { id: tabs.length + 1, url: "https://meet.google.com/new", mutedInfo: { muted } };
+      tabs.push(addedTab);
+      await sendBackgroundMessage({ type: "MEET_READY" }, { tab: addedTab });
+      await flush();
+      return addedTab;
+    },
+    async closeTab(id) {
+      tabs.splice(tabs.findIndex(tab => tab.id === id), 1);
+      removedListeners.forEach(listener => listener(id));
       await flush();
     },
     install: reason => Promise.all(installedListeners.map(listener => listener({ reason }))),
@@ -199,17 +294,18 @@ describe("Silenziare Meet", () => {
     const stream = await bridge.getUserMedia({ audio: true });
     const mic = stream.getAudioTracks()[0];
     assert.equal(mic.sample(), 1);
+    const notificationsBeforeCalls = bridge.notifications.length;
 
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     assert.equal(mic.sample(), 0);
     assert.equal(mic.enabled, true);
     assert.equal(bridge.tab.mutedInfo.muted, true);
 
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     assert.equal(mic.sample(), 1);
     assert.equal(mic.enabled, true);
     assert.equal(bridge.tab.mutedInfo.muted, false);
-    assert.deepEqual(bridge.notifications, []);
+    assert.equal(bridge.notifications.length, notificationsBeforeCalls);
   });
 
   test("stopping Meet's microphone releases the real microphone and audio processing", async () => {
@@ -221,8 +317,8 @@ describe("Silenziare Meet", () => {
 
     assert.equal(bridge.microphones[0].getAudioTracks()[0].readyState, "ended");
     assert.equal(bridge.audioContexts[0].state, "closed");
-    await bridge.setWildixBusy(true);
-    await bridge.setWildixBusy(false);
+    await bridge.addCall();
+    await bridge.terminateCall();
     assert.equal(stream.getAudioTracks()[0].sample(), 0);
   });
 
@@ -239,9 +335,9 @@ describe("Silenziare Meet", () => {
     assert.equal(lastClone.sample(), 1);
     assert.equal(bridge.microphones[0].getAudioTracks()[0].readyState, "live");
 
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     assert.equal(lastClone.sample(), 0);
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     assert.equal(lastClone.sample(), 1);
     lastClone.stop();
     assert.equal(bridge.microphones[0].getAudioTracks()[0].readyState, "ended");
@@ -261,9 +357,9 @@ describe("Silenziare Meet", () => {
     assert.equal(lastClone.sample(), 1);
     assert.equal(bridge.microphones[0].getAudioTracks()[0].readyState, "live");
 
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     assert.equal(lastClone.sample(), 0);
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     assert.equal(lastClone.sample(), 1);
     lastClone.stop();
     assert.equal(bridge.microphones[0].getAudioTracks()[0].readyState, "ended");
@@ -289,9 +385,9 @@ describe("Silenziare Meet", () => {
     secondStream.getTracks().forEach(track => track.stop());
 
     assert.deepEqual([firstClone.sample(), secondClone.sample()], [1, 1]);
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     assert.deepEqual([firstClone.sample(), secondClone.sample()], [0, 0]);
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     firstClone.stop();
     assert.equal(secondClone.sample(), 1);
     assert.deepEqual(bridge.audioContexts.map(context => context.state), ["closed", "running"]);
@@ -306,9 +402,9 @@ describe("Silenziare Meet", () => {
     bridge.loadMeet();
     await flush();
     const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     mic.enabled = false;
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     assert.equal(mic.enabled, false);
     assert.equal(mic.sample(), 0);
   });
@@ -319,10 +415,10 @@ describe("Silenziare Meet", () => {
     await flush();
     const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
     mic.enabled = false;
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     mic.enabled = true;
     assert.equal(mic.sample(), 0);
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     assert.equal(mic.enabled, true);
     assert.equal(mic.sample(), 1);
   });
@@ -333,22 +429,22 @@ describe("Silenziare Meet", () => {
     await flush();
     const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
     mic.enabled = false;
-    await bridge.setWildixBusy(true);
-    await bridge.setWildixBusy(false);
+    await bridge.addCall();
+    await bridge.terminateCall();
     assert.equal(mic.enabled, false);
     assert.equal(mic.sample(), 0);
   });
 
   test("all microphones requested while Occupato stay silent until Libero", async () => {
     const bridge = createHarness();
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     bridge.loadMeet();
     await flush();
     const streams = await Promise.all([
       bridge.getUserMedia({ audio: true }), bridge.getUserMedia({ audio: true })
     ]);
     assert.deepEqual(streams.map(stream => stream.getAudioTracks()[0].sample()), [0, 0]);
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     assert.deepEqual(streams.map(stream => stream.getAudioTracks()[0].sample()), [1, 1]);
   });
 
@@ -359,16 +455,17 @@ describe("Silenziare Meet", () => {
     let allowCapture;
     bridge.delayCaptureUntil(new Promise(resolve => { allowCapture = resolve; }));
     const pendingStream = bridge.getUserMedia({ audio: true });
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     allowCapture();
     const stream = await pendingStream;
     assert.equal(stream.getAudioTracks()[0].sample(), 0);
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     assert.equal(stream.getAudioTracks()[0].sample(), 1);
   });
 
   test("the signal stays closed until the initial state arrives from the background", async () => {
     const bridge = createHarness();
+    await flush();
     let allowReady;
     bridge.delayReadyUntil(new Promise(resolve => { allowReady = resolve; }));
     bridge.loadMeet();
@@ -453,17 +550,17 @@ describe("Silenziare Meet", () => {
   test("the tab's previous muted state is preserved", async () => {
     const bridge = createHarness({ tabMuted: true });
     bridge.loadMeet();
-    await bridge.setWildixBusy(true);
-    await bridge.setWildixBusy(false);
+    await bridge.addCall();
+    await bridge.terminateCall();
     assert.equal(bridge.tab.mutedInfo.muted, true);
   });
 
   test("tab audio is restored even if the tab leaves Meet while Occupato", async () => {
     const bridge = createHarness();
     bridge.loadMeet();
-    await bridge.setWildixBusy(true);
+    await bridge.addCall();
     bridge.tab.url = "https://example.com/";
-    await bridge.setWildixBusy(false);
+    await bridge.terminateCall();
     assert.equal(bridge.tab.mutedInfo.muted, false);
   });
 
@@ -485,13 +582,14 @@ describe("Silenziare Meet", () => {
     }
   });
 
-  test("installation keeps reinjecting Wildix detection in already open Collaboration tabs", async () => {
+  test("no extension script runs or is injected on Wildix Collaboration", async () => {
+    assert.ok(manifest.content_scripts.every(script =>
+      script.matches.every(pattern => pattern === "https://meet.google.com/*")));
+    assert.ok(!manifest.permissions.includes("scripting"));
     const bridge = createHarness();
     bridge.tab.url = "https://automaticmachines.wildixin.com/";
     await bridge.install("update");
-    assert.deepEqual(bridge.injections.map(injection => Array.from(injection.files)), [
-      ["src/wildix-rtc.js"], ["src/wildix.js"]
-    ]);
+    assert.deepEqual(bridge.injections, []);
   });
 
   test("unavailable notifications do not abort installation", async () => {
@@ -499,61 +597,111 @@ describe("Silenziare Meet", () => {
     bridge.failNotifications();
     bridge.tab.url = "https://automaticmachines.wildixin.com/";
     await bridge.install("install");
-    assert.equal(bridge.injections.length, 2);
+    assert.deepEqual(bridge.injections, []);
   });
 });
 
-// Runs the real wildix-rtc.js and wildix.js in one fake page.
-function createWildixPage() {
-  const window = new EventTarget();
-  const sent = [];
+describe("Occupato dal Centralino", () => {
+  test("Chiamata Wildix in uscita silenzia Meet dall'avvio", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    await flush();
+    const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
+    await bridge.addCall({ direction: "outgoing" });
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    assert.equal(mic.sample(), 0);
+    await bridge.terminateCall();
+    assert.equal(bridge.tab.mutedInfo.muted, false);
+    assert.equal(mic.sample(), 1);
+  });
 
-  window.RTCPeerConnection = class extends EventTarget {
-    connectionState = "new";
-    setState(state) {
-      this.connectionState = state;
-      this.dispatchEvent(new Event("connectionstatechange"));
-    }
-    close() { this.connectionState = "closed"; }
-  };
+  test("messaggi da Wildix Collaboration non possono cambiare Occupato o Libero", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    await flush();
+    const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
+    await bridge.sendTabMessage({ type: "WILDIX_STATE_CHANGED", busy: true });
+    await bridge.sendTabMessage({ type: "CENTRALINO_STATE_CHANGED", occupato: true, calls: [{}] });
+    assert.equal(bridge.tab.mutedInfo.muted, false);
+    assert.equal(mic.sample(), 1);
+    await bridge.addCall();
+    await bridge.sendTabMessage({ type: "WILDIX_STATE_CHANGED", busy: false });
+    await bridge.sendTabMessage({ type: "CENTRALINO_STATE_CHANGED", occupato: false, calls: [] });
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    assert.equal(mic.sample(), 0);
+  });
 
-  vm.runInNewContext(readSource("wildix-rtc.js"), { window, CustomEvent });
-  vm.runInNewContext(readSource("wildix.js"), {
-    window,
-    CustomEvent,
-    console: silentConsole,
-    setTimeout,
-    clearTimeout,
-    MutationObserver: class { observe() {} },
-    document: { documentElement: {}, querySelector: () => null },
-    chrome: {
-      runtime: {
-        getManifest: () => ({ version: "test" }),
-        sendMessage: async message => { sent.push(message.busy); }
-      }
+  test("tutte le schede Meet, anche aperte durante Occupato o uscite da Meet, riottengono lo Stato precedente", async () => {
+    const bridge = createHarness();
+    const alreadyMutedTab = await bridge.addMeetTab(true);
+    await bridge.addCall();
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    assert.equal(alreadyMutedTab.mutedInfo.muted, true);
+    const newMeetTab = await bridge.addMeetTab();
+    assert.equal(newMeetTab.mutedInfo.muted, true);
+    bridge.tab.url = "https://example.com/";
+    await bridge.terminateCall();
+    assert.equal(bridge.tab.mutedInfo.muted, false);
+    assert.equal(alreadyMutedTab.mutedInfo.muted, true);
+    assert.equal(newMeetTab.mutedInfo.muted, false);
+  });
+
+  test("chiudere una scheda Meet durante Occupato non impedisce il ripristino delle altre", async () => {
+    const bridge = createHarness();
+    const remainingTab = await bridge.addMeetTab();
+    await bridge.addCall();
+    await bridge.closeTab(bridge.tab.id);
+    assert.equal(remainingTab.mutedInfo.muted, true);
+    await bridge.terminateCall();
+    assert.equal(remainingTab.mutedInfo.muted, false);
+  });
+
+  test("Chiamata Wildix di gruppo o coda presa da un collega riporta subito a Libero", async () => {
+    for (const channel of ["SIP/123-gruppo", "SIP/123-coda"]) {
+      const bridge = createHarness();
+      bridge.loadMeet();
+      await flush();
+      const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
+      await bridge.addCall({ channel });
+      assert.equal(bridge.tab.mutedInfo.muted, true);
+      assert.equal(mic.sample(), 0);
+      await bridge.terminateCall(channel);
+      assert.equal(bridge.tab.mutedInfo.muted, false);
+      assert.equal(mic.sample(), 1);
     }
   });
 
-  return { window, sent };
-}
-
-describe("Wildix call detection", { concurrency: true }, () => {
-  test("a connected WebRTC call is busy until it is closed", async () => {
-    const page = createWildixPage();
-    const call = new page.window.RTCPeerConnection();
-    call.setState("connecting");
-    call.setState("connected");
-    assert.deepEqual(page.sent, [true]);
-
-    call.close();
-    await sleep(1200);
-    assert.deepEqual(page.sent, [true, false]);
+  test("attesa e Chiamate Wildix sovrapposte mantengono Occupato fino all'ultima chiusura", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    await flush();
+    const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
+    await bridge.addCall();
+    await bridge.updateCall("SIP/123-001", "hold");
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    assert.equal(mic.sample(), 0);
+    await bridge.addCall({ channel: "SIP/123-002", state: "up", direction: "outgoing" });
+    await bridge.terminateCall("SIP/123-002");
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    assert.equal(mic.sample(), 0);
+    await bridge.terminateCall();
+    assert.equal(bridge.tab.mutedInfo.muted, false);
+    assert.equal(mic.sample(), 1);
   });
 
-  test("a call that never connects is not busy", async () => {
-    const page = createWildixPage();
-    new page.window.RTCPeerConnection().setState("failed");
-    await sleep(1200);
-    assert.deepEqual(page.sent, [false]);
+  test("squillo in entrata silenzia Meet fino alla chiusura, anche dopo la risposta", async () => {
+    const bridge = createHarness();
+    bridge.loadMeet();
+    await flush();
+    const mic = (await bridge.getUserMedia({ audio: true })).getAudioTracks()[0];
+    await bridge.addCall();
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    assert.equal(mic.sample(), 0);
+    await bridge.updateCall("SIP/123-001", "up");
+    assert.equal(bridge.tab.mutedInfo.muted, true);
+    assert.equal(mic.sample(), 0);
+    await bridge.terminateCall();
+    assert.equal(bridge.tab.mutedInfo.muted, false);
+    assert.equal(mic.sample(), 1);
   });
 });

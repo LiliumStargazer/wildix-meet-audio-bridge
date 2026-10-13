@@ -26,7 +26,7 @@ function createCentralinoHarness(settings = null) {
   const contexts = [];
   const storageListeners = [];
   const requestedOrigins = [];
-  const meetChanges = [];
+  const meetTab = { id: 1, mutedInfo: { muted: false } };
   let hasHostPermission = true;
   let grantsHostPermission = true;
   let notificationsFail = false;
@@ -73,12 +73,22 @@ function createCentralinoHarness(settings = null) {
     constructor(interno, password, url) {
       this.credentials = { interno, password, url };
       this.listeners = {};
-      this.telephony = { on: (event, listener) => { this.listeners[event] = listener; } };
+      this.calls = [];
+      this.telephony = {
+        on: (event, listener) => { this.listeners[event] = listener; },
+        getActiveCalls: () => this.calls.slice()
+      };
       clients.push(this);
     }
     on(event, listener) { this.listeners[event] = listener; }
     connect() { this.hasStarted = true; }
-    emit(event, call) { this.listeners[event](call); }
+    emit(event, call) {
+      if (event === "disconnected") {
+        this.calls.forEach(call => this.listeners.call_terminated(call));
+        this.calls = [];
+      }
+      this.listeners[event](call);
+    }
   }
   const console = Object.fromEntries(["log", "warn", "error"].map(level =>
     [level, (...args) => logs.push(args)]));
@@ -107,7 +117,7 @@ function createCentralinoHarness(settings = null) {
       createDocument: async () => {
         contexts.push({ documentUrl: getURL("src/offscreen.html") });
         vm.runInNewContext(readSource("offscreen.js"), {
-          console, WTAPI: FakeWTAPI,
+          console, WTAPI: FakeWTAPI, queueMicrotask,
           chrome: { runtime: {
             sendMessage: message => sendMessage(message, getURL("src/offscreen.html"))
           } }
@@ -116,9 +126,9 @@ function createCentralinoHarness(settings = null) {
       closeDocument: async () => { contexts.length = 0; }
     },
     tabs: {
-      query: async () => [{ id: 1, mutedInfo: { muted: false } }],
-      update: async (...args) => { meetChanges.push(args); },
-      sendMessage: async (...args) => { meetChanges.push(args); },
+      query: async () => [structuredClone(meetTab)],
+      update: async (id, { muted }) => { meetTab.mutedInfo.muted = muted; },
+      sendMessage: async () => {},
       onRemoved: { addListener() {} }
     }
   };
@@ -129,7 +139,7 @@ function createCentralinoHarness(settings = null) {
 
   return {
     badge, notifications, logs, clients, local, session, startupListeners, installedListeners,
-    requestedOrigins, meetChanges,
+    requestedOrigins, meetTab,
     denyHostPermission() { grantsHostPermission = false; },
     revokeHostPermission() { hasHostPermission = false; },
     failNotifications() { notificationsFail = true; },
@@ -256,7 +266,7 @@ test("le opzioni rifiutano HTTP e il permesso negato senza cambiare le credenzia
   assert.equal(bridge.clients.length, 1);
 });
 
-test("gli eventi di Chiamata Wildix finiscono nei log, senza comandare Meet", async () => {
+test("gli eventi di Chiamata Wildix finiscono nei log senza includere la password", async () => {
   const bridge = createCentralinoHarness(credentials);
   await flush();
   const client = bridge.clients[0];
@@ -270,7 +280,6 @@ test("gli eventi di Chiamata Wildix finiscono nei log, senza comandare Meet", as
     assert.ok(bridge.logs.some(entry => entry.includes(event)));
   }
   await flush();
-  assert.deepEqual(bridge.meetChanges, []);
   assert.ok(!JSON.stringify(bridge.logs).includes(credentials.password));
 });
 
@@ -297,6 +306,69 @@ test("salvare nuove opzioni sostituisce il collegamento e ignora gli eventi del 
   await flush();
   assert.equal(reopenedOptions.elements.password.value, "password-sostituita");
   assert.equal(reopenedOptions.elements["connection-status"].textContent, "Collegato");
+});
+
+test("eventi Occupato/Libero di un collegamento sostituito non comandano Meet", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  const options = bridge.openOptions();
+  await flush();
+  const oldClient = bridge.clients[0];
+  oldClient.emit("connected");
+  await flush();
+  options.elements.password.value = "password-sostituita";
+  await options.save();
+  await flush();
+  const client = bridge.clients[1];
+  client.emit("connected");
+  await flush();
+  const call = {
+    getChannel: () => "SIP/123-001", getState: () => "ring", getDirection: () => "incoming"
+  };
+  oldClient.calls = [call];
+  oldClient.emit("call_added", call);
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, false);
+  client.calls = [call];
+  client.emit("call_added", call);
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+  oldClient.emit("call_terminated", call);
+  oldClient.calls = [];
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+});
+
+test("le terminazioni sintetiche della WTAPI allo scollegamento non riaprono Meet", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  const client = bridge.clients[0];
+  client.emit("connected");
+  const call = {
+    getChannel: () => "SIP/123-001", getState: () => "up", getDirection: () => "incoming"
+  };
+  client.calls = [call];
+  client.emit("call_added", call);
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+  client.emit("disconnected");
+  await flush();
+  assert.equal(bridge.badge.text, "!");
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+});
+
+test("messaggi Occupato/Libero malformati dal documento offscreen non comandano Meet", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  for (const invalidState of [
+    { occupato: "true", calls: [] }, { occupato: true }, { occupato: true, calls: {} }
+  ]) {
+    await bridge.sendMessage({
+      type: "CENTRALINO_STATE_CHANGED", connectionId: bridge.session.centralinoConnectionId,
+      ...invalidState
+    }, "src/offscreen.html");
+  }
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, false);
 });
 
 test("credenziali incomplete o indirizzi non sicuri non aprono un collegamento", async () => {
