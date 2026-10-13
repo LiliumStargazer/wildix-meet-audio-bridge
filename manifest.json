@@ -58,9 +58,19 @@
         "https://meet.google.com/*"
       ],
       "js": [
+        "src/meet-audio.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
         "src/meet.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ],
 

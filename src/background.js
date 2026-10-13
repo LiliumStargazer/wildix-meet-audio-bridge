@@ -109,17 +109,6 @@ chrome.runtime.onMessage.addListener(
       );
     }
 
-    if (message.type === "MEET_MIC_NOT_APPLIED") {
-      chrome.notifications.create({
-        type: "basic",
-        iconUrl: "icons/icon128.png",
-        title: "Microfono di Google Meet",
-        message: message.targetMuted
-          ? "Non sono riuscito a disattivarlo durante la chiamata Wildix: disattivalo a mano."
-          : "Non sono riuscito a riattivarlo dopo la chiamata Wildix: riattivalo a mano se ti serve."
-      });
-    }
-
     if (message.type === "MEET_READY") {
       enqueueOperation(
         `Meet tab ${tabId} ready`,
@@ -142,14 +131,25 @@ chrome.tabs.onRemoved.addListener(tabId => {
   });
 });
 
-// Tabs opened before an install or update keep running scripts that can no
-// longer reach the extension: inject fresh ones so no reload is needed.
+// A microphone already acquired by Meet cannot be intercepted retroactively.
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason !== "install" && reason !== "update") {
     return;
   }
 
+  await chrome.notifications.create({
+    type: "basic",
+    iconUrl: "icons/icon128.png",
+    title: "Ricarica Google Meet",
+    message: "Ricarica le schede Google Meet già aperte per silenziare il microfono durante le chiamate Wildix."
+  }).catch(error => {
+    console.warn(`${PREFIX} Impossibile mostrare la notifica di ricaricamento Meet`, error);
+  });
+
   for (const { matches, js, world = "ISOLATED" } of chrome.runtime.getManifest().content_scripts) {
+    if (matches.includes(MEET_URL)) {
+      continue;
+    }
     for (const tab of await chrome.tabs.query({ url: matches })) {
       chrome.scripting.executeScript({
         target: { tabId: tab.id },

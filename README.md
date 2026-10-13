@@ -6,12 +6,12 @@ Estensione Chrome che silenzia automaticamente Google Meet quando Wildix Collabo
 
 Quando Wildix riceve o gestisce una chiamata:
 
-- disattiva il microfono di Google Meet;
+- chiude il segnale del microfono che Google Meet riceve da Chrome, senza toccare il pulsante microfono di Meet;
 - silenzia completamente l'audio della scheda Google Meet.
 
 Quando la chiamata Wildix termina:
 
-- ripristina lo stato precedente del microfono di Meet;
+- riapre il segnale del microfono; il pulsante di Meet resta come l'utente l'ha lasciato, anche se lo ha cambiato durante la chiamata;
 - ripristina lo stato precedente dell'audio della scheda Meet.
 
 L'estensione non modifica il microfono o l'audio del sistema operativo e funziona interamente all'interno di Chrome.
@@ -42,7 +42,8 @@ wildix-meet-audio-bridge/
 │   └── icon128.png     icona dell'estensione e delle notifiche
 ├── src/
 │   ├── background.js   stato Wildix globale e audio delle schede Meet
-│   ├── meet.js         microfono di Google Meet
+│   ├── meet-audio.js   controllo del segnale microfono prima degli script di Meet
+│   ├── meet.js         inoltro dello stato Occupato/Libero alla pagina Meet
 │   ├── wildix.js       rilevamento chiamata dall'interfaccia Wildix
 │   └── wildix-rtc.js   rilevamento chiamata dalle connessioni WebRTC di Wildix
 └── test/
@@ -251,22 +252,24 @@ far arrivare una chiamata Wildix.
 Durante la chiamata:
 
 ```text
-Microfono Meet: OFF
-Audio Meet:     OFF
+Segnale microfono verso Meet: silenziato
+Pulsante microfono Meet:      invariato
+Audio Meet:                  OFF
 ```
 
 Quando la chiamata Wildix termina:
 
 ```text
-Microfono Meet: stato precedente
-Audio Meet:     stato precedente
+Segnale microfono verso Meet: aperto
+Pulsante microfono Meet:      come lasciato dall'utente
+Audio Meet:                  stato precedente
 ```
 
 Se il microfono Meet era già disattivato prima della telefonata, deve rimanere disattivato anche dopo la fine della chiamata.
 
-Se durante la chiamata Wildix l'utente riattiva manualmente il microfono di Meet, l'estensione non lo disattiva di nuovo.
+Se durante la chiamata Wildix l'utente riattiva manualmente il microfono di Meet, gli altri partecipanti continuano a non sentirlo finché l'Interno è Occupato, anche se l'icona di Meet mostra il microfono acceso.
 
-L'estensione clicca il pulsante del microfono una sola volta per ogni cambio di stato. Se Meet non applica il clic, l'estensione non ritenta e mostra una notifica di Chrome che chiede di sistemare il microfono a mano. Su macOS le notifiche di Google Chrome devono essere consentite in Impostazioni di Sistema → Notifiche.
+Il controllo viene inserito prima che Meet chieda il microfono. Dopo l'installazione o l'aggiornamento una notifica chiede di ricaricare le schede Meet già aperte: quelle riunioni non sono coperte fino al ricaricamento. Su macOS le notifiche di Google Chrome devono essere consentite in Impostazioni di Sistema → Notifiche.
 
 # Aggiornamento dell'estensione
 
@@ -294,7 +297,7 @@ Ricarica
 
 della scheda **Wildix Meet Audio Bridge**.
 
-Infine ricaricare Wildix. Le schede Google Meet già aperte vengono aggiornate automaticamente.
+Infine ricaricare Wildix e le schede Google Meet già aperte, come richiesto dalla notifica dell'estensione.
 
 Non aggiornare l'estensione durante una chiamata Wildix: Chrome cancella lo stato salvato e Meet resterebbe silenziato al termine della chiamata.
 
