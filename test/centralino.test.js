@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const FakeWTAPI = require("./fake-wtapi");
 
 const readSource = file =>
   fs.readFileSync(path.join(__dirname, "..", "src", file), "utf8");
@@ -79,36 +80,14 @@ function createCentralinoHarness(settings = null) {
     }
     if (!hasResponse) resolve();
   });
-  class FakeWTAPI {
+  class CentralinoWTAPI extends FakeWTAPI {
     static ajax = { settings: {} };
     constructor(interno, password, url) {
+      super();
       this.credentials = { interno, password, url };
-      this.listeners = {};
-      this.calls = [];
-      this.messageHandlers = [{ priority: 10, callback: packet => {
-        const event = packet.getChild("event", "urn:wildix:ami");
-        if (!event) return false;
-        this.calls = event.calls;
-        this.calls.forEach(call => this.listeners.call_added(call));
-        return true;
-      } }];
-      this.telephony = {
-        on: (event, listener) => { this.listeners[event] = listener; },
-        getActiveCalls: () => this.calls.slice()
-      };
       clients.push(this);
     }
-    on(event, listener) { this.listeners[event] = listener; }
     connect() { this.hasStarted = true; }
-    registerHandler(event, callback, scope, priority) {
-      this.messageHandlers.push({ priority, callback: packet => callback.call(scope, packet) });
-      this.messageHandlers.sort((first, second) => first.priority - second.priority);
-    }
-    receiveCallsState(calls = this.calls) {
-      const packet = { getChild: (name, namespace) => namespace === "urn:wildix:ami"
-        ? { calls, getAttribute: () => "state" } : null };
-      this.messageHandlers.some(handler => handler.callback(packet));
-    }
     emit(event, call) {
       if (event === "disconnected") {
         this.calls.forEach(call => this.listeners.call_terminated(call));
@@ -164,7 +143,7 @@ function createCentralinoHarness(settings = null) {
     offscreenListeners.length = 0;
     reconnectTimers.clear();
     vm.runInNewContext(readSource("offscreen.js"), {
-      console, WTAPI: FakeWTAPI, queueMicrotask,
+      console, WTAPI: CentralinoWTAPI, queueMicrotask,
       setTimeout: callback => {
         const timerId = ++nextTimerId;
         reconnectTimers.set(timerId, callback);
