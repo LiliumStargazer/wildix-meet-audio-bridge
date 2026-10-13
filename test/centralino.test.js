@@ -5,6 +5,9 @@ const path = require("node:path");
 const vm = require("node:vm");
 const FakeWTAPI = require("./fake-wtapi");
 
+const redIconPaths = { 16: "icons/icon16-red.png", 32: "icons/icon32-red.png" };
+const greenIconPaths = { 16: "icons/icon16-green.png", 32: "icons/icon32-green.png" };
+
 const readSource = file =>
   fs.readFileSync(path.join(__dirname, "..", "src", file), "utf8");
 
@@ -24,6 +27,7 @@ function createCentralinoHarness(settings = null) {
   const startupListeners = [];
   const installedListeners = [];
   const badge = {};
+  const icon = {};
   const contexts = [];
   const offscreenListeners = [];
   const reconnectTimers = new Map();
@@ -116,6 +120,7 @@ function createCentralinoHarness(settings = null) {
       }
     },
     action: {
+      setIcon: async ({ path }) => { icon.path = structuredClone(path); },
       setBadgeText: async ({ text }) => { badge.text = text; },
       setBadgeBackgroundColor: async ({ color }) => { badge.color = color; }
     },
@@ -178,7 +183,7 @@ function createCentralinoHarness(settings = null) {
   startWorker();
 
   return {
-    badge, notifications, logs, clients, local, session, startupListeners, installedListeners,
+    badge, icon, notifications, logs, clients, local, session, startupListeners, installedListeners,
     requestedOrigins, meetTab,
     stopWorker() { listeners.length = 0; },
     stopOffscreenMessages() { offscreenListeners.length = 0; },
@@ -285,6 +290,19 @@ test("il clic sull'icona apre il popup come unica interfaccia di configurazione"
   assert.equal(manifest.options_page, undefined);
 });
 
+test("l'azione parte con l'icona rossa e dispone delle varianti PNG per la barra di Chrome", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
+  assert.deepEqual(manifest.action.default_icon, redIconPaths);
+  for (const iconPaths of [redIconPaths, greenIconPaths]) {
+    for (const [size, file] of Object.entries(iconPaths)) {
+      const png = fs.readFileSync(path.join(__dirname, "..", file));
+      assert.deepEqual(png.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      assert.equal(png.readUInt32BE(16), Number(size));
+      assert.equal(png.readUInt32BE(20), Number(size));
+    }
+  }
+});
+
 test("il popup usa campi etichettati, comandi nativi e stato testuale e informa del salvataggio locale", () => {
   const html = readSource("popup.html");
   for (const id of ["interno", "password", "url"]) {
@@ -299,9 +317,10 @@ test("il popup usa campi etichettati, comandi nativi e stato testuale e informa 
   assert.match(html, /inviate solo al Centralino scelto/);
 });
 
-test("credenziali assenti: badge rosso, nessun login e nessuna notifica", async () => {
+test("credenziali assenti: icona rossa, badge di avviso, nessun login e nessuna notifica", async () => {
   const bridge = createCentralinoHarness();
   await flush();
+  assert.deepEqual(bridge.icon.path, redIconPaths);
   assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.badge.color, "#d93025");
   assert.equal(bridge.clients.length, 0);
@@ -325,28 +344,36 @@ test("avvio di Chrome e installazione collegano il Centralino senza una scheda C
   assert.equal(bridge.clients.length, 2);
   assert.deepEqual(client.credentials, credentials);
   assert.equal(client.hasStarted, true);
+  assert.deepEqual(bridge.icon.path, redIconPaths);
+  assert.equal(bridge.badge.text, "!");
   client.emit("connected");
   client.receiveCallsState([{
     getChannel: () => "SIP/123-riavvio", getState: () => "hold", getDirection: () => "outgoing"
   }]);
   await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
   assert.equal(bridge.badge.text, "");
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
 });
 
-test("badge e notifiche seguono solo i cambi del collegamento, non i tentativi", async () => {
+test("icona, badge e notifiche seguono solo i cambi del collegamento, non i tentativi", async () => {
   const bridge = createCentralinoHarness(credentials);
   await flush();
+  assert.deepEqual(bridge.icon.path, redIconPaths);
+  assert.equal(bridge.badge.text, "!");
+  assert.equal(bridge.notifications.length, 0);
   const client = bridge.clients[0];
   client.emit("disconnected");
   client.emit("disconnected");
   await flush();
+  assert.deepEqual(bridge.icon.path, redIconPaths);
   assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.notifications.length, 0);
 
   client.emit("connected");
   client.emit("connected");
   await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
   assert.equal(bridge.badge.text, "");
   assert.equal(bridge.session.centralinoConnected, true);
   assert.equal(bridge.notifications.length, 1);
@@ -354,16 +381,37 @@ test("badge e notifiche seguono solo i cambi del collegamento, non i tentativi",
   client.emit("disconnected");
   client.emit("disconnected");
   await flush();
+  assert.deepEqual(bridge.icon.path, redIconPaths);
   assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.session.centralinoConnected, false);
   assert.equal(bridge.notifications.length, 2);
 
   client.emit("connected");
   await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
   assert.equal(bridge.badge.text, "");
   assert.equal(bridge.notifications.length, 3);
   assert.match(bridge.logs.flat().join(" "), /Centralino collegato/);
   assert.match(bridge.logs.flat().join(" "), /Centralino scollegato/);
+});
+
+test("Occupato e Libero non cambiano l'icona verde, il badge o le notifiche del collegamento", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  const client = bridge.clients[0];
+  client.emit("connected");
+  await flush();
+  const call = {
+    getChannel: () => "SIP/123-001", getState: () => "ring", getDirection: () => "incoming"
+  };
+  for (const calls of [[call], []]) {
+    client.receiveCallsState(calls);
+    await flush();
+    assert.equal(bridge.meetTab.mutedInfo.muted, calls.length > 0);
+    assert.deepEqual(bridge.icon.path, greenIconPaths);
+    assert.equal(bridge.badge.text, "");
+    assert.equal(bridge.notifications.length, 1);
+  }
 });
 
 test("al primo accesso il popup mostra Interno e password mascherata con Impostazioni avanzate chiuse", async () => {
@@ -406,16 +454,19 @@ test("le credenziali salvate mostrano il riepilogo, ma Collegato solo dopo la co
   assert.equal(popup.elements.password.value, "");
   assert.equal(popup.elements["connection-status"].textContent, "Scollegato — riconnessione automatica");
   assert.match(popup.elements["save-status"].textContent, /salvate/);
+  assert.deepEqual(bridge.icon.path, redIconPaths);
   assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.notifications.length, 0);
   bridge.clients[0].emit("connected");
   await flush();
   assert.equal(popup.elements["connection-status"].textContent, "Collegato");
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
   assert.equal(bridge.badge.text, "");
   bridge.clients[0].emit("disconnected");
   await flush();
   assert.equal(popup.elements["connection-status"].textContent, "Scollegato — riconnessione automatica");
   assert.equal(popup.elements["centralino-form"].hidden, true);
+  assert.deepEqual(bridge.icon.path, redIconPaths);
   assert.equal(bridge.badge.text, "!");
 });
 
@@ -679,9 +730,13 @@ test("credenziali delle vecchie Opzioni e Centralino personalizzato persistono t
   assert.deepEqual(bridge.clients[1].credentials, previousCredentials);
   assert.equal(popup.elements["centralino-form"].hidden, true);
   assert.equal(popup.elements["connection-status"].textContent, "Scollegato — riconnessione automatica");
+  assert.deepEqual(bridge.icon.path, redIconPaths);
+  assert.equal(bridge.badge.text, "!");
   bridge.clients[1].emit("connected");
   await flush();
   assert.equal(popup.elements["connection-status"].textContent, "Collegato");
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
+  assert.equal(bridge.badge.text, "");
 });
 
 test("Impostazioni avanzate conserva il Centralino personalizzato anche chiusa e applica solo l'indirizzo salvato", async () => {
@@ -755,9 +810,11 @@ test("Modifica credenziali non riavvia il collegamento finché non si salvano i 
   assert.equal(popup.elements["connection-status"].textContent, "Scollegato — riconnessione automatica");
   oldClient.emit("connected");
   await flush();
+  assert.deepEqual(bridge.icon.path, redIconPaths);
   assert.equal(bridge.badge.text, "!");
   bridge.clients[1].emit("connected");
   await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
   assert.equal(bridge.badge.text, "");
   popup.close();
   const reopenedPopup = bridge.openPopup();
@@ -868,17 +925,23 @@ test("ritenti automatici senza notifiche ripetute riallineano a Libero una Chiam
   await flush();
   assert.equal(bridge.clients.at(-1).hasStarted, true);
   assert.equal(bridge.clients.length, 2);
+  assert.deepEqual(bridge.icon.path, redIconPaths);
+  assert.equal(bridge.badge.text, "!");
   bridge.clients.at(-1).emit("disconnected");
   await flush();
   bridge.retryConnection();
   await flush();
   assert.equal(bridge.clients.length, 3);
+  assert.deepEqual(bridge.icon.path, redIconPaths);
+  assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.notifications.length, 2);
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
 
   const reconnectedClient = bridge.clients.at(-1);
   reconnectedClient.emit("connected");
   await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
+  assert.equal(bridge.badge.text, "");
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
   reconnectedClient.receiveCallsState([]);
   await flush();
@@ -906,9 +969,42 @@ test("il service worker riavviato si riallinea al documento offscreen senza noti
   bridge.restartWorker();
   await flush();
   assert.equal(bridge.clients.length, 1);
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
   assert.equal(bridge.badge.text, "");
   assert.equal(bridge.meetTab.mutedInfo.muted, false);
   assert.equal(bridge.notifications.length, 1);
+});
+
+test("al riavvio il worker corregge l'icona dopo cambi del collegamento non ancora ricevuti", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  const client = bridge.clients[0];
+  client.emit("connected");
+  await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
+  assert.equal(bridge.notifications.length, 1);
+
+  bridge.stopWorker();
+  client.emit("disconnected");
+  await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
+  bridge.restartWorker();
+  await flush();
+  assert.deepEqual(bridge.icon.path, redIconPaths);
+  assert.equal(bridge.badge.text, "!");
+  assert.equal(bridge.notifications.length, 2);
+  assert.equal(bridge.clients.length, 1);
+
+  bridge.stopWorker();
+  client.emit("connected");
+  await flush();
+  assert.deepEqual(bridge.icon.path, redIconPaths);
+  bridge.restartWorker();
+  await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
+  assert.equal(bridge.badge.text, "");
+  assert.equal(bridge.notifications.length, 3);
+  assert.equal(bridge.clients.length, 1);
 });
 
 test("senza documento offscreen il worker riavviato ricollega il Centralino e ripristina Meet", async () => {
@@ -925,11 +1021,13 @@ test("senza documento offscreen il worker riavviato ricollega il Centralino e ri
   await flush();
   const client = bridge.clients.at(-1);
   assert.equal(client.hasStarted, true);
+  assert.deepEqual(bridge.icon.path, redIconPaths);
   assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
   client.emit("connected");
   client.receiveCallsState([]);
   await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
   assert.equal(bridge.badge.text, "");
   assert.equal(bridge.meetTab.mutedInfo.muted, false);
 });
@@ -969,6 +1067,7 @@ test("credenziali incomplete o indirizzi non sicuri non aprono un collegamento",
   ]) {
     const bridge = createCentralinoHarness(settings);
     await flush();
+    assert.deepEqual(bridge.icon.path, redIconPaths);
     assert.equal(bridge.badge.text, "!");
     assert.equal(bridge.clients.length, 0);
     assert.deepEqual(bridge.notifications, []);
@@ -1041,6 +1140,7 @@ test("una notifica non disponibile non fa apparire scollegato un Centralino coll
   await flush();
   bridge.clients[0].emit("connected");
   await flush();
+  assert.deepEqual(bridge.icon.path, greenIconPaths);
   assert.equal(bridge.badge.text, "");
   assert.equal(bridge.session.centralinoConnected, true);
 });

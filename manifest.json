@@ -51,6 +51,10 @@
 
   "action": {
     "default_title": "Wildix Meet Audio Bridge",
+    "default_icon": {
+      "16": "icons/icon16-red.png",
+      "32": "icons/icon32-red.png"
+    },
     "default_popup": "src/popup.html"
   }
 }

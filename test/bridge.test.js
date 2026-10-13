@@ -167,7 +167,7 @@ function createHarness({ tabMuted = false } = {}) {
         notifications.push(options);
       } },
       scripting: { executeScript: async options => { injections.push(options); } },
-      action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
+      action: { setIcon: async () => {}, setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
       storage: {
         local: {
           get: async () => ({ centralinoSettings: {
