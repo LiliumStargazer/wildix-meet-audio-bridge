@@ -37,6 +37,7 @@ function createCentralinoHarness(settings = null) {
   let notificationsFail = false;
   let settingsStorageFails = false;
   let offscreenCreationFails = false;
+  let offscreenCreationDelay;
   let localAccessLevel;
   const getURL = file => `chrome-extension://bridge/${file}`;
   const storageArea = (store, areaName) => ({
@@ -124,6 +125,7 @@ function createCentralinoHarness(settings = null) {
     } },
     offscreen: {
       createDocument: async () => {
+        await offscreenCreationDelay;
         if (offscreenCreationFails) throw new Error("Offscreen non disponibile");
         contexts.push({ documentUrl: getURL("src/offscreen.html") });
         loadOffscreenDocument();
@@ -200,8 +202,9 @@ function createCentralinoHarness(settings = null) {
     failNotifications() { notificationsFail = true; },
     failSettingsStorage() { settingsStorageFails = true; },
     failOffscreenCreation() { offscreenCreationFails = true; },
+    delayOffscreenCreationUntil(delay) { offscreenCreationDelay = delay; },
     get localAccessLevel() { return localAccessLevel; },
-    openPopup({ closeAfterSaving = false } = {}) {
+    openPopup({ closeAfterSaving = false, settingsReadDelay } = {}) {
       const html = readSource("popup.html");
       const elements = {};
       const document = { getElementById: id => elements[id], activeElement: null };
@@ -214,7 +217,7 @@ function createCentralinoHarness(settings = null) {
           hidden: /\bhidden\b/.test(attributes), disabled: /\bdisabled\b/.test(attributes),
           open: /\bopen\b/.test(attributes),
           addEventListener(event, listener) { this[event] = listener; },
-          focus() { document.activeElement = this; }
+          focus() { if (!this.disabled) document.activeElement = this; }
         };
       }
       const popupStorageListeners = [];
@@ -240,8 +243,10 @@ function createCentralinoHarness(settings = null) {
         console, URL, document,
         chrome: { ...chrome, storage: { ...chrome.storage,
           local: { ...chrome.storage.local,
-            get: keys => receiveInPopup(chrome.storage.local.get(keys)),
-            set: settings => receiveInPopup(chrome.storage.local.set(settings))
+            get: keys => receiveInPopup(chrome.storage.local.get(keys).then(async snapshot => {
+              await settingsReadDelay;
+              return snapshot;
+            }))
           },
           onChanged: { addListener: observeStorage }
         }, runtime: { ...runtime,
@@ -254,7 +259,9 @@ function createCentralinoHarness(settings = null) {
       return {
         elements, document,
         save: () => elements["centralino-form"].submit({ preventDefault() {} }),
-        editCredentials: () => elements["edit-credentials"].click(),
+        editCredentials() {
+          if (!elements["edit-credentials"].disabled) elements["edit-credentials"].click();
+        },
         toggleAdvancedSettings() {
           elements["advanced-settings"].open = !elements["advanced-settings"].open;
         },
@@ -432,6 +439,69 @@ test("chiudere il popup appena persistono le credenziali non impedisce il colleg
   assert.equal(bridge.clients.length, 1);
 });
 
+test("una lettura iniziale tardiva non sostituisce le credenziali aggiornate mentre il popup si riapre", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  let finishCreatingOffscreen;
+  bridge.delayOffscreenCreationUntil(new Promise(resolve => { finishCreatingOffscreen = resolve; }));
+  const popup = bridge.openPopup();
+  await flush();
+  popup.editCredentials();
+  const updatedCredentials = {
+    interno: "456", password: "password-aggiornata", url: "https://nuovo.wildixin.com"
+  };
+  popup.elements.interno.value = updatedCredentials.interno;
+  popup.elements.password.value = updatedCredentials.password;
+  popup.elements.url.value = updatedCredentials.url;
+  popup.save();
+  await flush();
+  popup.close();
+  let finishReadingSettings;
+  const settingsReadDelay = new Promise(resolve => { finishReadingSettings = resolve; });
+  const reopenedPopup = bridge.openPopup({ settingsReadDelay });
+  await flush();
+  finishCreatingOffscreen();
+  await flush();
+  assert.equal(reopenedPopup.elements["summary-interno"].textContent, "456");
+  finishReadingSettings();
+  await flush();
+  assert.equal(reopenedPopup.elements["summary-interno"].textContent, "456");
+  reopenedPopup.editCredentials();
+  assert.equal(reopenedPopup.elements.interno.value, "456");
+  assert.equal(reopenedPopup.elements.password.value, "password-aggiornata");
+  assert.equal(reopenedPopup.elements.url.value, "https://nuovo.wildixin.com");
+  reopenedPopup.elements.interno.value = "789";
+  await reopenedPopup.save();
+  await flush();
+  assert.deepEqual(bridge.clients.at(-1).credentials, { ...updatedCredentials, interno: "789" });
+});
+
+test("Modifica credenziali attende il salvataggio precedente prima di consentire una nuova modifica", async () => {
+  const bridge = createCentralinoHarness();
+  const popup = bridge.openPopup();
+  await flush();
+  let finishCreatingOffscreen;
+  bridge.delayOffscreenCreationUntil(new Promise(resolve => { finishCreatingOffscreen = resolve; }));
+  popup.elements.interno.value = "123";
+  popup.elements.password.value = credentials.password;
+  const pendingSave = popup.save();
+  await flush();
+  assert.equal(popup.elements["credentials-summary"].hidden, false);
+  assert.equal(popup.elements["edit-credentials"].disabled, true);
+  popup.editCredentials();
+  assert.equal(popup.elements["centralino-form"].hidden, true);
+  finishCreatingOffscreen();
+  await pendingSave;
+  await flush();
+  assert.equal(popup.elements["edit-credentials"].disabled, false);
+  assert.equal(popup.document.activeElement, popup.elements["edit-credentials"]);
+  popup.editCredentials();
+  popup.elements.password.value = "password-corretta";
+  assert.equal(popup.elements["centralino-form"].hidden, false);
+  await popup.save();
+  await flush();
+  assert.deepEqual(bridge.clients.at(-1).credentials, { ...credentials, password: "password-corretta" });
+});
+
 test("login fallito e caduta della rete mantengono il riepilogo e aggiornano lo stato alla riconnessione", async () => {
   const bridge = createCentralinoHarness();
   const popup = bridge.openPopup();
@@ -561,6 +631,8 @@ test("credenziali persistite restano nel riepilogo anche se il background non ri
   assert.equal(popup.elements["connection-status"].textContent, "Scollegato — riconnessione automatica");
   assert.equal(bridge.clients.length, 0);
   assert.equal(bridge.notifications.length, 0);
+  popup.editCredentials();
+  assert.equal(popup.elements["centralino-form"].hidden, false);
 });
 
 test("gli eventi di Chiamata Wildix finiscono nei log senza includere la password", async () => {

@@ -49,9 +49,12 @@ editCredentialsButton.addEventListener("click", () => {
 
 (async () => {
   const { centralinoSettings } = await chrome.storage.local.get("centralinoSettings");
-  savedCentralinoSettings = centralinoSettings;
-  if (savedCentralinoSettings) {
-    showSavedCredentials();
+  // Storage changes received while reading are newer than this snapshot.
+  if (savedCentralinoSettings === undefined) {
+    savedCentralinoSettings = centralinoSettings;
+    if (savedCentralinoSettings) {
+      showSavedCredentials();
+    }
   }
   const { centralinoConnected } = await chrome.storage.session.get("centralinoConnected");
   showCentralinoConnection(centralinoConnected === true);
@@ -63,6 +66,7 @@ editCredentialsButton.addEventListener("click", () => {
 centralinoForm.addEventListener("submit", async event => {
   event.preventDefault();
   saveButton.disabled = true;
+  editCredentialsButton.disabled = true;
   saveStatus.textContent = "";
   try {
     const settings = validateCentralinoSettings({
@@ -85,5 +89,9 @@ centralinoForm.addEventListener("submit", async event => {
     saveStatus.textContent = error.message;
   } finally {
     saveButton.disabled = false;
+    editCredentialsButton.disabled = false;
+    if (centralinoForm.hidden) {
+      editCredentialsButton.focus();
+    }
   }
 });
