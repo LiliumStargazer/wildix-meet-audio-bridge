@@ -124,10 +124,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       !sender.tab && message.type === "CENTRALINO_GET_SETTINGS") {
     enqueueCentralinoOperation(async () => {
       const { centralinoSettings } = await chrome.storage.local.get("centralinoSettings");
-      const { centralinoConnectionId } = await chrome.storage.session.get("centralinoConnectionId");
+      const { centralinoConnectionId, internoOccupato } = await chrome.storage.session.get({
+        centralinoConnectionId: null, internoOccupato: false
+      });
       return {
         settings: validateCentralinoSettings(centralinoSettings),
-        connectionId: centralinoConnectionId
+        connectionId: centralinoConnectionId,
+        occupato: internoOccupato
       };
     }).then(sendResponse, () => sendResponse({ error: "Configurazione del Centralino non valida." }));
     return true;

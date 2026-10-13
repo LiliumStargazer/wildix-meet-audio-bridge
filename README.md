@@ -2,7 +2,7 @@
 
 Estensione Chrome che silenzia automaticamente Google Meet quando l'Interno è Occupato, secondo gli eventi del Centralino Wildix.
 
-Versione corrente: **v0.3.0**. [Scarica lo ZIP](https://github.com/LiliumStargazer/wildix-meet-audio-bridge/releases/download/v0.3.0/wildix-meet-audio-bridge-v0.3.0.zip).
+Versione corrente: **v0.3.1**. [Scarica lo ZIP](https://github.com/LiliumStargazer/wildix-meet-audio-bridge/releases/download/v0.3.1/wildix-meet-audio-bridge-v0.3.1.zip).
 
 ## Funzionamento
 
@@ -92,7 +92,7 @@ Si può chiudere e riaprire la finestrella: il collegamento continua in backgrou
 
 **Collegato/Scollegato** è distinto da **Occupato/Libero**: durante una Chiamata Wildix l'icona resta verde se il collegamento è attivo. Lo stato è disponibile anche come testo e si aggiorna mentre la finestrella resta aperta. Il badge e le notifiche seguono i cambi del collegamento, senza una notifica per ogni tentativo fallito o riapertura della finestrella.
 
-Se il collegamento cade, lo stato **Occupato/Libero** resta invariato: Meet non viene riaperto durante una Chiamata Wildix già rilevata. L'estensione ritenta automaticamente dopo 5 secondi e, alla riconnessione, attende l'elenco delle chiamate dal Centralino prima di riallineare Meet, anche quando l'elenco è vuoto. Finché è Scollegato, non può rilevare nuove Chiamate Wildix.
+Una Chiamata Wildix presente nell'elenco WTAPI produce subito **Occupato**, anche senza un messaggio iniziale delle chiamate. Se il collegamento cade, lo stato **Occupato/Libero** resta invariato: Meet non viene riaperto durante una Chiamata Wildix già rilevata. L'estensione ritenta automaticamente dopo 5 secondi. Per cancellare un Occupato conservato durante lo scollegamento, attende un elenco completo delle chiamate dal Centralino, anche vuoto; nuove chiamate rilevate possono invece produrre subito Occupato. Finché è Scollegato, non può rilevare nuove Chiamate Wildix.
 
 Gli eventi del Centralino sono l'unica fonte dello stato **Occupato/Libero** che comanda Meet: basta una chiamata attiva, in squillo, risposta o attesa, su qualunque dispositivo dell'Interno. Le chiamate sovrapposte mantengono Meet silenziato fino all'ultima chiusura. Nessuno script dell'estensione gira su Wildix Collaboration: il vecchio rilevamento da pulsanti e WebRTC è stato eliminato.
 
@@ -102,7 +102,7 @@ La versione attuale richiede un Interno e una password validi per **WTAPI v1** e
 
 La libreria inclusa in `src/wtapi.js` è **WTAPI v1.0.2**, copia invariata di <https://automaticmachines.wildixin.com/public/wtapi.js>, scaricata il 13/10/2026 (Last-Modified: 22/06/2026). SHA-256: `384cefab95377c936f637450604862f1f6d23ecea07a68396b51a601e38d4da9`. Chrome non carica codice remoto; le risposte HTTP della libreria sono forzate a JSON per evitare valutazione di JavaScript remoto.
 
-**WTAPI v1 è deprecata** e l'accesso con password è annunciato come deprecato dal Q3 2026: un aggiornamento del Centralino può impedirne il funzionamento. La v0.3.0 non implementa ancora WTAPI v2/OAuth 2.0.
+**WTAPI v1 è deprecata** e l'accesso con password è annunciato come deprecato dal Q3 2026: un aggiornamento del Centralino può impedirne il funzionamento. La versione attuale non implementa ancora WTAPI v2/OAuth 2.0.
 
 Per la futura migrazione, un amministratore dovrà:
 
@@ -123,15 +123,15 @@ node --test
 
 ## Creazione di una release e dello ZIP
 
-Prima del rilascio, aggiornare la versione in `manifest.json` e la sezione Versioni di questo README, eseguire i test e committare tutte le modifiche che devono entrare nel pacchetto su `main`. Esempio per la v0.3.0:
+Prima del rilascio, aggiornare la versione in `manifest.json` e la sezione Versioni di questo README, eseguire i test e committare tutte le modifiche che devono entrare nel pacchetto su `main`. Esempio per la v0.3.1:
 
 ```bash
 node --test
 git add README.md manifest.json
-git commit -m "Release v0.3.0"
+git commit -m "Release v0.3.1"
 git push origin main
-git tag -a v0.3.0 -m "v0.3.0"
-git push origin v0.3.0
+git tag -a v0.3.1 -m "v0.3.1"
+git push origin v0.3.1
 ```
 
 Creare lo ZIP dal tag, non dai file locali non committati:
@@ -140,18 +140,18 @@ Creare lo ZIP dal tag, non dai file locali non committati:
 mkdir -p dist
 git archive \
   --format=zip \
-  --prefix=wildix-meet-audio-bridge-v0.3.0/ \
-  --output=dist/wildix-meet-audio-bridge-v0.3.0.zip \
-  v0.3.0
-unzip -t dist/wildix-meet-audio-bridge-v0.3.0.zip
+  --prefix=wildix-meet-audio-bridge-v0.3.1/ \
+  --output=dist/wildix-meet-audio-bridge-v0.3.1.zip \
+  v0.3.1
+unzip -t dist/wildix-meet-audio-bridge-v0.3.1.zip
 ```
 
 `dist/` è già esclusa da Git. Per pubblicare il pacchetto nella release GitHub, con la CLI `gh` autenticata:
 
 ```bash
-gh release create v0.3.0 \
-  dist/wildix-meet-audio-bridge-v0.3.0.zip \
-  --verify-tag --title "v0.3.0" --generate-notes
+gh release create v0.3.1 \
+  dist/wildix-meet-audio-bridge-v0.3.1.zip \
+  --verify-tag --title "v0.3.1" --generate-notes
 ```
 
 ### ZIP di test senza tag
@@ -173,10 +173,10 @@ Anche questo comando esclude le modifiche non committate. Per i pacchetti distri
 
 ## 1. Scaricare il pacchetto
 
-Scaricare lo ZIP dalla [release v0.3.0](https://github.com/LiliumStargazer/wildix-meet-audio-bridge/releases/tag/v0.3.0):
+Scaricare lo ZIP dalla [release v0.3.1](https://github.com/LiliumStargazer/wildix-meet-audio-bridge/releases/tag/v0.3.1):
 
 ```text
-wildix-meet-audio-bridge-v0.3.0.zip
+wildix-meet-audio-bridge-v0.3.1.zip
 ```
 
 e decomprimerlo in una posizione permanente.
@@ -232,7 +232,7 @@ manifest.json
 Ad esempio:
 
 ```text
-wildix-meet-audio-bridge-v0.3.0/
+wildix-meet-audio-bridge-v0.3.1/
 ├── manifest.json
 ├── README.md
 └── src/
@@ -285,7 +285,7 @@ Il controllo viene inserito prima che Meet chieda il microfono. Dopo l'installaz
 
 # Aggiornamento dell'estensione
 
-Scaricare e decomprimere lo ZIP della nuova release, per esempio **v0.3.0**.
+Scaricare e decomprimere lo ZIP della nuova release, per esempio **v0.3.1**.
 
 Sostituire i file nella cartella già utilizzata dall'estensione, senza rimuovere l'estensione da Chrome: in questo modo le credenziali salvate restano nel profilo. La vecchia pagina Opzioni è sostituita dalla finestrella al clic sull'icona.
 
@@ -319,6 +319,16 @@ Aprire `chrome://extensions` e abilitare **Modalità sviluppatore**.
 Se una notifica non appare, controllare anche che il sistema operativo consenta le notifiche di Chrome. Non pubblicare password o altri segreti in log e schermate.
 
 # Versioni
+
+## v0.3.1
+
+Correzione del mancato silenziamento di Meet quando WTAPI riceve eventi di chiamata senza un messaggio iniziale `state`.
+
+- Una Chiamata Wildix attiva produce subito Occupato e la chiusura dell'ultima chiamata osservata, partendo da Libero, ripristina Meet.
+- Un Occupato conservato durante una perdita del collegamento non viene cancellato da un elenco ancora incompleto alla riconnessione.
+- Test di regressione aggiunti; riproduzione verificata anche con la libreria WTAPI inclusa.
+
+Dopo l'aggiornamento ricaricare l'estensione e tutte le schede Meet già aperte, fuori da una Chiamata Wildix.
 
 ## v0.3.0
 

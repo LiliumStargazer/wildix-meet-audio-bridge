@@ -875,6 +875,28 @@ test("eventi Occupato/Libero di un collegamento sostituito non comandano Meet", 
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
 });
 
+test("una Chiamata Wildix rende Occupato anche senza uno stato iniziale delle chiamate", async () => {
+  const bridge = createCentralinoHarness(credentials);
+  await flush();
+  const client = bridge.clients[0];
+  client.emit("connected");
+  const call = {
+    getChannel: () => "SIP/123-001", getState: () => "ring", getDirection: () => "outgoing"
+  };
+  client.calls = [call];
+  client.emit("call_added", call);
+  await flush();
+  assert.equal(bridge.session.centralinoConnected, true);
+  assert.equal(bridge.session.internoOccupato ?? false, true);
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+
+  client.emit("call_terminated", call);
+  client.calls = [];
+  await flush();
+  assert.equal(bridge.session.internoOccupato, false);
+  assert.equal(bridge.meetTab.mutedInfo.muted, false);
+});
+
 test("le terminazioni sintetiche della WTAPI allo scollegamento non riaprono Meet", async () => {
   const bridge = createCentralinoHarness(credentials);
   await flush();
@@ -910,6 +932,16 @@ test("la riconnessione attende lo stato del Centralino prima di riaprire Meet", 
   await flush();
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
   client.emit("connected");
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
+  const newCall = {
+    getChannel: () => "SIP/123-002", getState: () => "ring", getDirection: () => "outgoing"
+  };
+  client.calls = [newCall];
+  client.emit("call_added", newCall);
+  await flush();
+  client.emit("call_terminated", newCall);
+  client.calls = [];
   await flush();
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
   client.receiveCallsState([call]);
@@ -1041,6 +1073,13 @@ test("senza documento offscreen il worker riavviato ricollega il Centralino e ri
   assert.equal(bridge.badge.text, "!");
   assert.equal(bridge.meetTab.mutedInfo.muted, true);
   client.emit("connected");
+  client.calls = [call];
+  client.emit("call_added", call);
+  await flush();
+  client.emit("call_terminated", call);
+  client.calls = [];
+  await flush();
+  assert.equal(bridge.meetTab.mutedInfo.muted, true);
   client.receiveCallsState([]);
   await flush();
   assert.deepEqual(bridge.icon.path, greenIconPaths);

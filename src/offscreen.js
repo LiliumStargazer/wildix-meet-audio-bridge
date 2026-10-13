@@ -8,22 +8,28 @@ function scheduleCentralinoReconnect() {
 }
 
 (async () => {
-  const { settings, connectionId } = await chrome.runtime.sendMessage({ type: "CENTRALINO_GET_SETTINGS" });
+  const { settings, connectionId, occupato } = await chrome.runtime.sendMessage({ type: "CENTRALINO_GET_SETTINGS" });
   const wtapi = new WTAPI(settings.interno, settings.password, settings.url);
   // MV3 forbids evaluating a server response as JavaScript.
   WTAPI.ajax.settings.dataType = "json";
   let isConnected = false;
-  let hasCallsState = false;
+  let isInternoOccupato = occupato;
+  let canReportLibero = false;
 
   function reportInternoOccupato() {
-    if (!isConnected || !hasCallsState) {
+    if (!isConnected) {
       return;
     }
     const calls = wtapi.telephony.getActiveCalls().map(call => ({
       channel: call.getChannel(), state: call.getState(), direction: call.getDirection()
     }));
+    // A live call proves Occupato; clearing a retained Occupato needs a full state.
+    if (!calls.length && !canReportLibero) {
+      return;
+    }
+    isInternoOccupato = calls.length > 0;
     chrome.runtime.sendMessage({
-      type: "CENTRALINO_STATE_CHANGED", occupato: calls.length > 0, calls, connectionId
+      type: "CENTRALINO_STATE_CHANGED", occupato: isInternoOccupato, calls, connectionId
     }).catch(() => {
       console.error("[Wildix Meet Audio Bridge] Impossibile comunicare lo stato Occupato/Libero");
     });
@@ -50,7 +56,7 @@ function scheduleCentralinoReconnect() {
   wtapi.registerHandler("message", packet => {
     const event = packet.getChild("event", "urn:wildix:ami");
     if (isConnected && event?.getAttribute("type") === "state") {
-      hasCallsState = true;
+      canReportLibero = true;
       queueMicrotask(reportInternoOccupato);
     }
     return false;
@@ -59,7 +65,7 @@ function scheduleCentralinoReconnect() {
   for (const [event, connected] of [["connected", true], ["disconnected", false]]) {
     wtapi.on(event, () => {
       isConnected = connected;
-      hasCallsState = false;
+      canReportLibero = connected && !isInternoOccupato;
       if (connected) {
         clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
