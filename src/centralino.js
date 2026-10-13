@@ -80,12 +80,29 @@ async function startCentralinoConnection(restart = false) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (sender.url === chrome.runtime.getURL("src/options.html") &&
-      message.type === "CENTRALINO_RESTART") {
-    enqueueCentralinoOperation(() => startCentralinoConnection(true))
-      .then(() => sendResponse({ ok: true }), () => sendResponse({
-        error: "Impossibile avviare il collegamento. Controlla le opzioni e i permessi."
-      }));
+  if (sender.id === chrome.runtime.id && !sender.tab &&
+      sender.url === chrome.runtime.getURL("src/popup.html") &&
+      message.type === "CENTRALINO_SAVE_SETTINGS") {
+    enqueueCentralinoOperation(async () => {
+      let settings;
+      try {
+        settings = validateCentralinoSettings(message.settings);
+      } catch (error) {
+        return { error: error.message };
+      }
+      if (!await chrome.permissions.contains({ origins: [`${settings.url}/*`] })) {
+        return { error: "Permesso per il Centralino negato. Le credenziali non sono state salvate." };
+      }
+      try {
+        await chrome.storage.local.set({ centralinoSettings: settings });
+      } catch {
+        return { error: "Impossibile salvare le credenziali. Riprova." };
+      }
+      await startCentralinoConnection(true);
+      return { ok: true };
+    }).then(sendResponse, () => sendResponse({
+      error: "Impossibile avviare il collegamento. Controlla la configurazione e i permessi."
+    }));
     return true;
   }
   if (sender.url === chrome.runtime.getURL("src/offscreen.html") &&

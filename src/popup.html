@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wildix Meet Audio Bridge</title>
+  <style>
+    body { width: 340px; margin: 16px; font: 14px/1.5 system-ui, sans-serif; }
+    h1 { font-size: 18px; }
+    input { box-sizing: border-box; width: 100%; font: inherit; }
+    button { padding: 6px 12px; font: inherit; }
+    details { margin: 12px 0; }
+    summary { cursor: pointer; }
+  </style>
+  <script src="centralino-settings.js" defer></script>
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <h1>Collegamento al Centralino</h1>
+  <p>Stato: <strong id="connection-status" role="status">Scollegato</strong></p>
+  <section id="credentials-summary" hidden>
+    <p>Interno: <strong id="summary-interno"></strong></p>
+    <button id="edit-credentials" type="button">Modifica credenziali</button>
+  </section>
+  <form id="centralino-form" novalidate>
+    <p><label for="interno">Interno</label><br>
+      <input id="interno" name="interno" autocomplete="username" required></p>
+    <p><label for="password">Password</label><br>
+      <input id="password" name="password" type="password" autocomplete="current-password" required></p>
+    <details id="advanced-settings">
+      <summary>Impostazioni avanzate</summary>
+      <p><label for="url">Indirizzo del Centralino</label><br>
+        <input id="url" name="url" type="url" value="https://automaticmachines.wildixin.com" required></p>
+    </details>
+    <button id="save" type="submit" disabled>Salva e collega</button>
+  </form>
+  <p id="save-status" role="status"></p>
+  <p>Le credenziali restano in questo profilo Chrome, non cifrate, e sono inviate solo al Centralino scelto.</p>
+</body>
+</html>
