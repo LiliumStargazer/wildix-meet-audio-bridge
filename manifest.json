@@ -2,13 +2,15 @@
   "manifest_version": 3,
   "name": "Wildix Meet Audio Bridge",
   "version": "0.2.1",
+  "minimum_chrome_version": "116",
   "description": "Silenzia automaticamente Google Meet durante le chiamate Wildix.",
 
   "permissions": [
     "tabs",
     "storage",
     "scripting",
-    "notifications"
+    "notifications",
+    "offscreen"
   ],
 
   "icons": {
@@ -19,6 +21,13 @@
     "https://automaticmachines.wildixin.com/*",
     "https://meet.google.com/*"
   ],
+
+  "optional_host_permissions": ["https://*/*"],
+
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": true
+  },
 
   "background": {
     "service_worker": "src/background.js"

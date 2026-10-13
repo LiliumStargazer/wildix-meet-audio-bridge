@@ -70,21 +70,31 @@ function createHarness({
 
   const manifest = () => ({ version: "test", content_scripts: [] });
 
-  vm.runInNewContext(readSource("background.js"), {
+  const background = vm.createContext({
     console: silentConsole,
     chrome: {
       runtime: {
         getManifest: manifest,
-        onMessage: { addListener: f => { backgroundListener = f; } },
-        onInstalled: { addListener() {} }
+        getURL: file => `chrome-extension://bridge/${file}`,
+        getContexts: async () => [],
+        onMessage: { addListener: f => {
+          const previousListener = backgroundListener;
+          backgroundListener = (...args) => { previousListener?.(...args); return f(...args); };
+        } },
+        onInstalled: { addListener() {} },
+        onStartup: { addListener() {} }
       },
       notifications: { create: options => notifications.push(options.message) },
+      action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
       storage: {
+        local: { get: async () => ({}), setAccessLevel: async () => {} },
         session: {
-          get: async defaults => structuredClone({
-            ...defaults,
-            ...Object.fromEntries(Object.keys(defaults).filter(k => k in store).map(k => [k, store[k]]))
-          }),
+          get: async defaults => structuredClone(typeof defaults === "string"
+            ? { [defaults]: store[defaults] }
+            : {
+              ...defaults,
+              ...Object.fromEntries(Object.keys(defaults).filter(k => k in store).map(k => [k, store[k]]))
+            }),
           set: async values => Object.assign(store, structuredClone(values))
         }
       },
@@ -102,6 +112,9 @@ function createHarness({
       }
     }
   });
+  background.importScripts = (...files) => files.forEach(file =>
+    vm.runInContext(readSource(file), background));
+  vm.runInContext(readSource("background.js"), background);
 
   function loadMeet() {
     class MutationObserver {

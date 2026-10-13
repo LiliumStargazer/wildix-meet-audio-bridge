@@ -1,3 +1,5 @@
+importScripts("centralino.js");
+
 const VERSION = chrome.runtime.getManifest().version;
 const PREFIX = `[Wildix Meet Audio Bridge v${VERSION}]`;
 
